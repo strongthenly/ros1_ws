@@ -1,0 +1,9 @@
+# 统一换行符：仓库内一律 LF（含 Windows 检出），避免 CRLF 反复产生脏标记
+# 仓库含 Linux shell/python 脚本，必须 LF 才能在 WSL/Linux 正常执行
+* text=auto eol=lf
+
+# 二进制文件不转换
+*.png binary
+*.jpg binary
+*.bag binary
+*.pcd binary
