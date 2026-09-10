@@ -1,0 +1,19 @@
+<launch>
+  <arg name="host" default="127.0.0.1"/>
+  <arg name="port" default="41451"/>
+  <arg name="vehicle" default="PX4"/>
+  <arg name="camera_name" default="front_center"/>
+  <arg name="imu_rate" default="220"/>
+  <arg name="lidar_rate" default="10"/>
+  <arg name="rgb_rate" default="30"/>
+  <arg name="depth_rate" default="5"/>
+  <param name="use_sim_time" value="true"/>
+  <node pkg="twin_bridge" type="bridge.py" name="twin_sensor_bridge" output="screen">
+    <param name="host" value="$(arg host)"/><param name="port" value="$(arg port)"/>
+    <param name="vehicle" value="$(arg vehicle)"/>
+    <param name="camera_name" value="$(arg camera_name)"/>
+    <param name="imu_rate" value="$(arg imu_rate)"/><param name="lidar_rate" value="$(arg lidar_rate)"/>
+    <param name="rgb_rate" value="$(arg rgb_rate)"/><param name="depth_rate" value="$(arg depth_rate)"/>
+    <param name="camera_fov_deg" value="90"/>
+  </node>
+</launch>
