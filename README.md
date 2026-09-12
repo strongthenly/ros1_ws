@@ -52,13 +52,13 @@
 
 ### 一键启动（WSL `ros1-twin`）
 ```bash
-bash scripts/twin_livo_rviz.sh      # 全量启动: PX4 + 桥 + FAST-LIVO2 + RViz
-bash scripts/twin_livo_fast.sh      # 快速补缺: 只启动"缺失"的组件(环境已就绪时 0-2 秒)
+bash scripts/twin_livo_fast.sh          # 日常: 只补"缺失"的组件（常驻时 0-2 秒）
+bash scripts/twin_livo_fast.sh --full   # 异常时: 先清残留 roslaunch，启动后等待并验证链路
 ```
 
 > **关于启动速度**：本机 `roscore` 包装脚本要 **140 秒**！但其内部的 `rosmaster`（2s）和
 > `rosout`（0s）本体都极快 —— 所以启动脚本**绕开 `roscore`，直接起 `rosmaster + rosout`**
-> → 全量启动 **约 6 秒**。只要 master/PX4/桥保持常驻，`twin_livo_fast.sh` 通常 **0-2 秒**。
+> → 全量启动 **约 6 秒**。只要 master/PX4/桥保持常驻，日常启动通常 **0-2 秒**。
 > 所以别随手杀 master；用完只关 RViz 即可。
 
 ### 一键关闭
@@ -148,8 +148,9 @@ MID360 的真实 FOV 为 **-7° ~ +52°**（向下仅 7°）。飞行高度 h �
 - 0.4 m 高 → 盲区 ≈ 3 m
 
 ### 6. shell 脚本里 `pkill -f` 的自匹配陷阱
-若脚本文件名包含模式串（如 `twin_livo_rviz.sh` 含 `rviz`），`pkill -f rviz` 会**杀掉脚本自己**。
-改用 `pkill -x rviz`（精确进程名）或用更具体的模式。
+若脚本文件名包含模式串（例如脚本名里含 `rviz`，再写 `pkill -f rviz`），会**杀掉脚本自己**。
+改用 `pkill -x <精确进程名>`，或让模式更具体（如 `pkill -f "roslaunch twin_bridge"`）。
+> 同理：内联 `bash -c "... pkill -f roslaunch ..."` 也会自匹配 —— 把清理逻辑放进 `.sh` 文件再执行。
 
 ### 7. roslaunch 报 run_id 不匹配
 ```

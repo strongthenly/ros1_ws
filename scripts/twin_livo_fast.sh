@@ -1,10 +1,15 @@
 #!/bin/bash
 # ============================================================
-#  快速启动 (fast v2)
-#  关键优化: 不用 roscore（本机要 140s），直接起 rosmaster+rosout（~4s）
-#  用法: bash ~/twin_livo_fast.sh
+#  启动脚本（合并版）  v3
+#   默认:      只补"缺失"的组件（常驻时 0-2 秒）
+#   --full:    先清残留 roslaunch，启动后等待并验证链路
+#              （用于异常时：run_id 冲突 / 桥没数据）
+#  用法: bash ~/twin_livo_fast.sh [--full]
 # ============================================================
 START=$(date +%s)
+FULL=0
+[ "$1" = "--full" ] && FULL=1
+
 export ROS_MASTER_URI=http://127.0.0.1:11311
 export ROS_IP=127.0.0.1
 source /opt/ros/noetic/setup.bash
@@ -13,7 +18,13 @@ ROOT=~/twin_ws/src/FAST-LIVO2
 started=""
 el(){ echo $(( $(date +%s) - START )); }
 
-# 1) ROS master（绕开慢的 roscore）
+if [ $FULL -eq 1 ]; then
+  echo "  [full] 清理残留 roslaunch（防 run_id 冲突）..."
+  pkill -f roslaunch 2>/dev/null
+  sleep 2
+fi
+
+# 1) ROS master（绕开慢的 roscore：它 140s，rosmaster+rosout 只要 ~4s）
 if ! timeout 2 rosnode list >/dev/null 2>&1; then
   echo "  [1/5] 启动 ROS master（rosmaster+rosout，约 4 秒）..."
   setsid rosmaster --core -p 11311 > /tmp/rosmaster.log 2>&1 < /dev/null &
@@ -68,6 +79,23 @@ if ! pgrep -x rviz >/dev/null 2>&1; then
   started="$started RViz"
 else
   echo "  [5/5] RViz 已在跑 ✓"
+fi
+
+# --full: 等待并验证链路
+if [ $FULL -eq 1 ]; then
+  echo ""
+  echo "  [full] 等 PX4 <-> AirSim TCP4560（最多 120s）..."
+  for i in $(seq 1 40); do
+    ss -tn 2>/dev/null | grep -q ':4560' && { echo "         ✅ 4560 已连接"; break; }
+    [ $((i % 5)) -eq 0 ] && echo "         ... 等 4560（已 $(el)s）"
+    sleep 3
+  done
+  echo "  [full] 等 /twin 出数据（最多 60s）..."
+  for i in $(seq 1 20); do
+    timeout 4 rostopic echo -n 1 /twin/lidar/points_preview/header >/dev/null 2>&1 && { echo "         ✅ /twin 有数据"; break; }
+    [ $((i % 5)) -eq 0 ] && echo "         ... 等数据（已 $(el)s）"
+    sleep 3
+  done
 fi
 
 echo ""
