@@ -35,10 +35,11 @@
 | 目录 | 内容 |
 |---|---|
 | `twin_bridge/` | 仿真桥（AirSim → ROS）。`bridge.py` 已修改：点云补 `rgb` 字段以适配 FAST-LIVO2 |
-| `fastlivo_config/` | FAST-LIVO2 配置。`TwinSim*` = 仿真数据流；`TwinReal*` = 实机 bag 回放 |
-| `scripts/` | 一键启动 / 关闭脚本 |
+| `config/fastlivo/` | FAST-LIVO2 配置。`TwinSim*` = 仿真数据流；`TwinReal*` = 实机 bag 回放 |
+| `config/rviz/` | RViz 配置（上方俯视 Orbit 视角） |
+| `scripts/` | 一键启动 / 关闭脚本 + 启动器（`start_fastlivo.py` / `start_mavros.py`） |
 | `control/` | MAVROS offboard 控制脚本（定点、前进、机动） |
-| `tools/` | 点云分析工具 |
+| `tools/` | 点云分析、数据流检查工具（`cloud_analyze.py` / `check_streams.py`） |
 | `docs/` | 开发记录与总结 |
 
 ---
@@ -89,8 +90,8 @@ rostopic hz /cloud_registered                          # 地图频率
 
 **加载方式**
 ```bash
-rosparam load fastlivo_config/TwinSim.yaml
-rosparam load fastlivo_config/TwinSim_camera.yaml /laserMapping
+rosparam load config/fastlivo/TwinSim.yaml
+rosparam load config/fastlivo/TwinSim_camera.yaml /laserMapping
 rosrun fast_livo fastlivo_mapping __name:=laserMapping
 ```
 
@@ -175,7 +176,7 @@ AirSim 配的是 `LockStep`，**必须先有 PX4 连上 TCP 4560，仿真才跑*
 
 ## 七、实机标定参数（来自 fouruav 机载）
 
-从实机 `~/catkin_ws/src/FAST-LIVO2/config/` 读取，已写入 `fastlivo_config/`：
+从实机 `~/catkin_ws/src/FAST-LIVO2/config/` 读取，已写入 `config/fastlivo/`：
 
 | 项 | 值 |
 |---|---|
