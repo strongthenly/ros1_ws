@@ -63,9 +63,11 @@ bash scripts/twin_livo_fast.sh      # 快速补缺: 只启动"缺失"的组件(�
 
 ### 一键关闭
 ```bash
-bash scripts/twin_livo_stop.sh          # 默认: 只停 桥/FAST-LIVO2/RViz（保留 master+PX4 常驻 → 下次秒开）
-bash scripts/twin_livo_stop.sh --all    # 彻底清场: 连 master/PX4 一起停（下次需完整启动）
+bash scripts/twin_livo_stop.sh          # 默认: 停 PX4 + 桥 + FAST-LIVO2 + RViz；保留 ROS master 常驻
+bash scripts/twin_livo_stop.sh --all    # 彻底清场: 连 master 一起停
 ```
+> 设计取舍：**PX4 停**（它占资源）、**master 留**（它只是个轻量小服务，但重启要 140s）。
+> 这样下次启动只需重起 PX4/桥/算法，**约 20-40 秒**（PX4 启动并连上 AirSim 需要时间）。
 
 ### 查看定位
 ```bash
