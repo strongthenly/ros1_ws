@@ -1,26 +1,31 @@
 #!/bin/bash
 # ============================================================
-#  快速启动 (fast): 只启动"缺失"的组件, 不杀不重启
-#  环境已就绪时极快（只补 RViz/FAST-LIVO2 通常 <7s）
+#  快速启动 (fast v2)
+#  关键优化: 不用 roscore（本机要 140s），直接起 rosmaster+rosout（~4s）
 #  用法: bash ~/twin_livo_fast.sh
 # ============================================================
 START=$(date +%s)
+export ROS_MASTER_URI=http://127.0.0.1:11311
+export ROS_IP=127.0.0.1
 source /opt/ros/noetic/setup.bash
 source ~/twin_ws/devel/setup.bash
 ROOT=~/twin_ws/src/FAST-LIVO2
-
 started=""
+el(){ echo $(( $(date +%s) - START )); }
 
-# 1) ROS master
+# 1) ROS master（绕开慢的 roscore）
 if ! timeout 2 rosnode list >/dev/null 2>&1; then
-  echo "  [1/5] 启动 roscore（本机慢，可能 1-3 分钟）..."
-  setsid roscore > /tmp/roscore.log 2>&1 < /dev/null &
-  for i in $(seq 1 120); do
+  echo "  [1/5] 启动 ROS master（rosmaster+rosout，约 4 秒）..."
+  setsid rosmaster --core -p 11311 > /tmp/rosmaster.log 2>&1 < /dev/null &
+  for i in $(seq 1 30); do
     timeout 2 rosnode list >/dev/null 2>&1 && break
-    [ $((i % 20)) -eq 0 ] && echo "        ... 仍在等 master（${i}s）"
     sleep 1
   done
-  started="$started roscore"
+  rosparam set /rosdistro noetic 2>/dev/null
+  rosparam set /rosversion 1.17.4 2>/dev/null
+  setsid rosrun rosout rosout __name:=rosout > /tmp/rosout.log 2>&1 < /dev/null &
+  sleep 2
+  started="$started master($(el)s)"
 else
   echo "  [1/5] master 已在跑 ✓"
 fi
@@ -35,7 +40,7 @@ else
   echo "  [2/5] PX4 已在跑 ✓"
 fi
 
-# 3) 仿真桥
+# 3) 桥
 if ! pgrep -f "bridge.py" >/dev/null 2>&1; then
   echo "  [3/5] 启动仿真桥 ..."
   setsid roslaunch twin_bridge bridge.launch host:=127.0.0.1 imu_rate:=220 rgb_rate:=30 depth_rate:=5 \
@@ -65,8 +70,6 @@ else
   echo "  [5/5] RViz 已在跑 ✓"
 fi
 
-END=$(date +%s)
 echo ""
 echo "本次启动: ${started:-（无需启动, 全部已在跑）}"
-echo "耗时: $((END-START)) 秒"
-pgrep -af "rosmaster|bin/px4|bridge.py|fastlivo_mapping|rviz" | sed 's/^/  /' | head -8
+echo "耗时: $(el) 秒"

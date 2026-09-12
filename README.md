@@ -56,13 +56,15 @@ bash scripts/twin_livo_rviz.sh      # 全量启动: PX4 + 桥 + FAST-LIVO2 + RVi
 bash scripts/twin_livo_fast.sh      # 快速补缺: 只启动"缺失"的组件(环境已就绪时 0-2 秒)
 ```
 
-> **关于启动速度**：`roscore` 在本机单次要 1~3 分钟（CPU 争抢所致），是唯一瓶颈。
-> 只要 **master/PX4/桥保持常驻**，`twin_livo_fast.sh` 只补 RViz/FAST-LIVO2 → **几秒内完成**。
-> 所以别随手杀 roscore；让环境常驻，用完只关 RViz 即可。
+> **关于启动速度**：本机 `roscore` 包装脚本要 **140 秒**！但其内部的 `rosmaster`（2s）和
+> `rosout`（0s）本体都极快 —— 所以启动脚本**绕开 `roscore`，直接起 `rosmaster + rosout`**
+> → 全量启动 **约 6 秒**。只要 master/PX4/桥保持常驻，`twin_livo_fast.sh` 通常 **0-2 秒**。
+> 所以别随手杀 master；用完只关 RViz 即可。
 
 ### 一键关闭
 ```bash
-bash scripts/twin_livo_stop.sh      # 清理fastlivo/rviz/桥/PX4/roscore
+bash scripts/twin_livo_stop.sh          # 默认: 只停 桥/FAST-LIVO2/RViz（保留 master+PX4 常驻 → 下次秒开）
+bash scripts/twin_livo_stop.sh --all    # 彻底清场: 连 master/PX4 一起停（下次需完整启动）
 ```
 
 ### 查看定位

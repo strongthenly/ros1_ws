@@ -8,6 +8,9 @@
 #  v4: 不再无脑重启 roscore（roscore 启动要 2min+，能复用就复用）；
 #      master 等待加进度输出；PX4 等待加进度
 # ============================================================
+# 固定为本机回环，避免主机名/多网卡解析拖慢 roscore
+export ROS_MASTER_URI=http://127.0.0.1:11311
+export ROS_IP=127.0.0.1
 source /opt/ros/noetic/setup.bash
 source ~/twin_ws/devel/setup.bash
 
@@ -31,19 +34,19 @@ else
   echo "      -> 已启动 PX4 (tmux: px4)"
 fi
 
-echo "[3/7] 确保 ROS master 就绪 ..."
-if timeout 6 rosnode list >/dev/null 2>&1; then
-  echo "      ✅ master 已在跑，直接复用（省 2 分钟）"
+echo "[3/7] 启动 ROS master（rosmaster+rosout，约 4 秒，不用 roscore）..."
+if timeout 4 rosnode list >/dev/null 2>&1; then
+  echo "      ✅ master 已在跑，直接复用"
 else
-  echo "      -> 没有 master，启动 roscore（本机较慢，可能需 1-3 分钟）..."
-  setsid roscore > /tmp/roscore.log 2>&1 < /dev/null &
-  READY=0
-  for i in $(seq 1 60); do
-    if timeout 4 rosnode list >/dev/null 2>&1; then READY=1; echo "      ✅ master 就绪（第 ${i} 次探测）"; break; fi
-    [ $((i % 10)) -eq 0 ] && echo "         ... 仍在等 master（${i}0s）"
-    sleep 2
+  setsid rosmaster --core -p 11311 > /tmp/rosmaster.log 2>&1 < /dev/null &
+  for i in $(seq 1 30); do
+    timeout 2 rosnode list >/dev/null 2>&1 && break
+    sleep 1
   done
-  [ "$READY" = "1" ] || { echo "      ⚠️ master 未就绪，看 /tmp/roscore.log"; tail -5 /tmp/roscore.log; }
+  rosparam set /rosdistro noetic 2>/dev/null
+  rosparam set /rosversion 1.17.4 2>/dev/null
+  setsid rosrun rosout rosout __name:=rosout > /tmp/rosout.log 2>&1 < /dev/null &
+  echo "      ✅ master 就绪"
 fi
 
 echo "[4/7] 等待 PX4 <-> AirSim TCP4560 连接（最多 120s）..."
