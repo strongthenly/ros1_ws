@@ -142,6 +142,25 @@ MID360 的真实 FOV 为 **-7° ~ +52°**（向下仅 7°）。飞行高度 h �
 若脚本文件名包含模式串（如 `twin_livo_rviz.sh` 含 `rviz`），`pkill -f rviz` 会**杀掉脚本自己**。
 改用 `pkill -x rviz`（精确进程名）或用更具体的模式。
 
+### 7. roslaunch 报 run_id 不匹配
+```
+RLException: run_id on parameter server does not match declared run_id: xxx vs yyy
+```
+= 有**残留的 roslaunch** 占着 master 的 `/run_id`（例如之前跑过 mavros 的 roslaunch 没退干净）。
+启动前必须清理**所有** roslaunch，而不是只清理目标那一个：
+```bash
+pkill -f roslaunch; pkill -f rosmaster; pkill -f roscore
+# 等它们真正退出后再起干净的 roscore
+```
+
+### 8. 启动时序要求（LockStep 模式）
+AirSim 配的是 `LockStep`，**必须先有 PX4 连上 TCP 4560，仿真才跑**；链路一断 AirSim 就回到
+`Waiting for TCP connection on port 4560`，此时**传感器零数据**（桥自然也没数据）。所以：
+- 启动前 **Blocks 必须处于 Play**
+- PX4 启动后要**等 TCP4560 真正建立**再启桥（判据 `ss -tn | grep ':4560'`）
+- 桥从启动到出数据约需 **30 秒**（等 LiDAR 初始化 + 仿真步进）
+- 不要在每次启动时无条件杀掉正在跑的 PX4（重启一次要多等几十秒）
+
 ---
 
 ## 七、实机标定参数（来自 fouruav 机载）
