@@ -52,8 +52,13 @@
 
 ### 一键启动（WSL `ros1-twin`）
 ```bash
-bash scripts/twin_livo_rviz.sh      # PX4 + 桥 + FAST-LIVO2 + RViz
+bash scripts/twin_livo_rviz.sh      # 全量启动: PX4 + 桥 + FAST-LIVO2 + RViz
+bash scripts/twin_livo_fast.sh      # 快速补缺: 只启动"缺失"的组件(环境已就绪时 0-2 秒)
 ```
+
+> **关于启动速度**：`roscore` 在本机单次要 1~3 分钟（CPU 争抢所致），是唯一瓶颈。
+> 只要 **master/PX4/桥保持常驻**，`twin_livo_fast.sh` 只补 RViz/FAST-LIVO2 → **几秒内完成**。
+> 所以别随手杀 roscore；让环境常驻，用完只关 RViz 即可。
 
 ### 一键关闭
 ```bash
