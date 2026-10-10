@@ -1,0 +1,9 @@
+<launch>
+  <!-- 机型选择: drone:=odin 或 drone:=mid360 -->
+  <arg name="drone" default="mid360"/>
+  <arg name="config_file" default="$(find task_run_scripts)/config/$(arg drone).yaml"/>
+
+  <node pkg="task_run_scripts" type="obstacle_to_px4_node" name="obstacle_to_px4" output="screen">
+    <rosparam command="load" file="$(arg config_file)"/>
+  </node>
+</launch>

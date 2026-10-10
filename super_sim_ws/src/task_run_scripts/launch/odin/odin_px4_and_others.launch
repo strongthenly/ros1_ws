@@ -1,0 +1,28 @@
+<launch>
+      <!-- Odin 版 px4_and_others：px4 + mavros + realman + static tf + Odin 里程计转发
+           （由 start_odin.sh 引用；与 fastlivo2 版解耦，互不影响） -->
+
+      <include file="$(find task_run_scripts)/launch/px4.launch" />
+
+      <!-- Odin 特有：高频里程计节流 + 转发 MAVROS vision_pose（fastlivo2 不需要） -->
+      <node pkg="topic_tools" type="throttle" name="odom_throttle_node"
+          args="messages /odin1/odometry_highfreq 40.0 /odin1/odometry_throttled" />
+
+      <!-- odom_to_mavros: 直接作为 ROS node 启动（无 bash 包装），确保 roslaunch 关闭时能级联清理，不残留孤儿进程 -->
+      <node name="odom_to_mavros_node"
+          pkg="task_run_scripts"
+          type="odom_to_mavros.py"
+          output="screen"/>
+
+      <node name="send_initial_mav_command"
+          pkg="mavros"
+          type="mavcmd"
+          args="long 511 32 15000 0 0 0 0 0"
+          launch-prefix="bash -c 'sleep 1; $0 $@'"/>
+
+      <include file="$(find task_run_scripts)/launch/realman.launch" />
+
+      <node pkg="tf" type="static_transform_publisher" name="odom_to_map_broadcaster" 
+          args="0 0 0 0 0 0 map odom  100" />
+
+</launch>

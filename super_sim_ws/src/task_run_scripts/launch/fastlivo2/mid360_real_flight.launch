@@ -1,0 +1,9 @@
+<launch>
+  <!-- Mid360 专用包装：复用 real_flight.launch 模板，仅覆盖 fsm 配置与 rviz 配置。
+       fsm 配置 mid360_real_flight.yaml（Mid360 专用，订阅 /cloud_registered）；
+       rviz 用 mid360_top_down.rviz（GlobalCloud 订阅 /cloud_registered）。 -->
+  <include file="$(find task_run_scripts)/launch/real_flight.launch">
+    <arg name="config_path" value="$(find task_run_scripts)/config/mid360_real_flight.yaml"/>
+    <arg name="rviz_config" value="$(find task_run_scripts)/rviz/mid360_top_down.rviz"/>
+  </include>
+</launch>

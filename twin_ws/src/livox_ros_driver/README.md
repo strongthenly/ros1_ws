@@ -1,0 +1,1 @@
+Message-only subset from https://github.com/Livox-SDK/livox_ros_driver . Do not install alongside the full package of the same name. Replace this subset with the full driver when accessing physical hardware.

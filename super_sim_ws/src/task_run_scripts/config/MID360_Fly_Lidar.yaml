@@ -1,0 +1,99 @@
+# ============================================================
+# MID360_Fly_Lidar.yaml — 🗺️ 高质量建图配置（精度优先）
+# 用途：离线/高质量建图（纯雷达，img_en=0）
+# 特点：全点云(voxel 0.5)、高迭代、稠密地图、PCD 更密
+# 注意：算力消耗约为飞行配置的 2 倍
+# 切换：roslaunch task_run_scripts mapping_MID360.launch config_name:=MID360_Fly_Lidar.yaml
+# ============================================================
+common:
+  img_topic: "/usb_cam/image_raw"
+  lid_topic: "/livox/lidar"
+  imu_topic: "/livox/imu_tf"
+  img_en: 0
+  lidar_en: 1
+  ros_driver_bug_fix: false
+
+extrin_calib:
+  extrinsic_T: [-0.011, -0.02329, 0.04412]
+  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+  # Rcl: [-0.00395831,-0.999653,0.0260368,
+  #       0.000729266,-0.0260399,-0.999661,
+  #       0.999992,-0.00393798,0.000832087] 
+  # Pcl: [-0.0474452, -0.0836841,-0.0631942]
+  Rcl: [ -0.000601,  -0.999899,   0.014194,
+        -0.006397,  -0.014190,  -0.999879,
+          0.999979,  -0.000691,  -0.006388]
+  Pcl: [  0.011720,  -0.078665,  -0.048631]
+
+time_offset: 
+  imu_time_offset: 0.0
+  img_time_offset: 0.1
+  exposure_time_init: 0.0
+
+preprocess:
+  point_filter_num: 1.5  #之前配置：1
+  filter_size_surf: 0.1
+  lidar_type: 1 # Livox Avia LiDAR
+  scan_line: 4
+  blind: 0.2
+
+vio:
+  max_iterations: 3
+  outlier_threshold: 1000 # 78 100 156 #100 200 500 700 infinite
+  img_point_cov: 100 # 100 1000 
+  patch_size: 6
+  patch_pyrimid_level: 3
+  normal_en: true
+  raycast_en: false
+  inverse_composition_en: false
+  exposure_estimate_en: false
+  inv_expo_cov: 0.1
+
+imu:
+  imu_en: true
+  imu_int_frame: 30
+  acc_cov: 0.5 # 0.2
+  gyr_cov: 0.3 # 0.5
+  b_acc_cov: 0.0001 # 0.1
+  b_gyr_cov: 0.0001 # 0.1
+
+lio:
+  max_iterations: 5
+  dept_err: 0.01
+  beam_err: 0.03
+  min_eigen_value: 0.0025 # 0.005
+  voxel_size: 0.5
+  max_layer: 2
+  max_points_num: 40      #之前配置：50
+  layer_init_num: [5, 5, 5, 5, 5]
+
+local_map:  
+  map_sliding_en: false
+  half_map_size: 100
+  sliding_thresh: 8
+
+uav:
+  imu_rate_odom: false
+  gravity_align_en: false
+
+publish:
+  dense_map_en: true
+  pub_effect_point_en: false 
+  pub_plane_en: false
+  pub_scan_num: 1
+  blind_rgb_points: 0.0
+
+evo:
+  seq_name: "CBD_Building_01"
+  pose_output_en: false
+
+pcd_save:
+  pcd_save_en: false
+  colmap_output_en: false # need to set interval = -1
+  filter_size_pcd: 0.1
+  interval: -1
+  # how many LiDAR frames saved in each pcd file;
+  # >0: 每累积 interval 帧就保存一个 <时间戳>.pcd（边建图边落盘，即使进程被强杀也有数据）
+  # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+  #      （注意：-1 模式下 PCD 只在 run() 正常退出后才写入，遥控器 SIGKILL 强杀会导致 PCD 丢失/全零）

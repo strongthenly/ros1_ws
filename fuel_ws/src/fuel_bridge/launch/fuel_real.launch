@@ -1,0 +1,114 @@
+<launch>
+  <!-- ================================================================
+       FUEL 真实平台启动（不含自带仿真）
+       输入: FAST-LIVO2 (经 fuel_input_bridge 转换)
+       用法: roslaunch fuel_bridge fuel_real.launch
+       ================================================================ -->
+
+  <!-- 起飞/悬停高度（seed 悬停 = FUEL 初始轨迹高度，必须同源） -->
+  <arg name="seed_z"      default="1.5"/>
+
+  <!-- 探索区域（按你的 AirSim 场景调整） -->
+  <arg name="map_size_x" value="240.0"/>
+  <arg name="map_size_y" value="240.0"/>
+  <arg name="map_size_z" value="11.0"/>
+
+  <arg name="init_x" value="0"/>
+  <arg name="init_y" value="0"/>
+  <!-- init_z 必须与 seed_z 一致：traj_server 启动时会发一条 (0,0,init_z) 的占位指令，
+       控制桥收到后就会走 FUEL 分支、不再走 seed 分支 —— 两者不一致就会卡在 init_z 高度 -->
+  <arg name="init_z" default="$(arg seed_z)"/>
+  <!-- [FUEL2SUPER] FUEL 轨迹输出话题。默认 planning/pos_cmd（FUEL 独立运行）；
+       与 SUPER 联调时传 fuel_cmd_topic:=/fuel/pos_cmd_sink，把 FUEL 的轨迹输出
+       改道到无人订阅的话题，避免和 SUPER 的 fsm_node 抢 /planning/pos_cmd 的控制权 -->
+  <arg name="fuel_cmd_topic" default="planning/pos_cmd"/>
+
+  <!-- 输入话题（由 fuel_input_bridge 提供） -->
+  <arg name="odom_topic"        value="/odom_world"/>
+  <arg name="sensor_pose_topic" value="/map_ros/pose"/>
+  <arg name="cloud_topic"       value="/map_ros/cloud"/>
+  <arg name="depth_topic"       value="/map_ros/depth"/>
+
+  <!-- 相机参数（用 cloud 输入时不生效；若改用 depth 需填 D435 内参） -->
+  <arg name="cx" value="321.04638671875"/>
+  <arg name="cy" value="243.44969177246094"/>
+  <arg name="fx" value="387.229248046875"/>
+  <arg name="fy" value="387.229248046875"/>
+
+  <!-- 速度/加速度限制（与 PX4 offboard 匹配；为防撞刻意保守：0.8 m/s） -->
+  <arg name="max_vel" value="0.8"/>
+  <arg name="max_acc" value="1.0"/>
+
+  <!-- 输入桥: FAST-LIVO2 转 FUEL -->
+  <node pkg="fuel_bridge" name="fuel_input_bridge" type="fuel_input_bridge.py" output="screen"/>
+
+  <!-- 控制桥: FUEL 转 MAVROS/PX4（默认关闭，确认无误后再开） -->
+  <arg name="enable_ctrl" default="false"/>
+  <arg name="ctrl_mode"   default="position"/>
+  <group if="$(arg enable_ctrl)">
+    <node pkg="fuel_bridge" name="fuel_ctrl_bridge" type="fuel_ctrl_bridge.py" output="screen">
+      <param name="mode"          value="$(arg ctrl_mode)"/>
+      <param name="auto_offboard" value="true"/>
+      <param name="rate"          value="50.0"/>
+      <param name="offboard_wait" value="3.0"/>
+      <param name="seed_z"        value="$(arg seed_z)"/>
+      <!-- 坐标系朝向对齐：camera_init 与 PX4 EKF 的 yaw 定义不同，必须对齐否则撞墙 -->
+      <param name="auto_align"    value="true"/>
+      <param name="align_samples" value="15"/>
+    </node>
+  </group>
+
+  <!-- FUEL 核心（探索 + 规划，不含仿真） -->
+  <include file="$(find exploration_manager)/launch/algorithm.xml">
+    <arg name="map_size_x_" value="$(arg map_size_x)"/>
+    <arg name="map_size_y_" value="$(arg map_size_y)"/>
+    <arg name="map_size_z_" value="$(arg map_size_z)"/>
+
+    <!-- 探索边界（按场景改） -->
+    <arg name="box_min_x" value="-115.0"/>
+    <arg name="box_min_y" value="-115.0"/>
+    <arg name="box_min_z" value="-2.5"/>
+    <arg name="box_max_x" value="115.0"/>
+    <arg name="box_max_y" value="115.0"/>
+    <arg name="box_max_z" value="6.0"/>
+
+    <arg name="odometry_topic"    value="$(arg odom_topic)"/>
+    <arg name="sensor_pose_topic" value="$(arg sensor_pose_topic)"/>
+    <arg name="depth_topic"       value="$(arg depth_topic)"/>
+    <arg name="cloud_topic"       value="$(arg cloud_topic)"/>
+
+    <arg name="cx" value="$(arg cx)"/>
+    <arg name="cy" value="$(arg cy)"/>
+    <arg name="fx" value="$(arg fx)"/>
+    <arg name="fy" value="$(arg fy)"/>
+
+    <arg name="max_vel" value="$(arg max_vel)"/>
+    <arg name="max_acc" value="$(arg max_acc)"/>
+  </include>
+
+  <!-- 轨迹服务器（输出 planning/pos_cmd） -->
+  <node pkg="plan_manage" name="traj_server" type="traj_server" output="screen">
+    <remap from="/position_cmd" to="$(arg fuel_cmd_topic)"/>   <!-- [FUEL2SUPER] 默认 planning/pos_cmd -->
+    <remap from="/odom_world"   to="$(arg odom_topic)"/>
+    <param name="traj_server/time_forward" value="1.5" type="double"/>
+    <param name="traj_server/pub_traj_id"  value="4"   type="int"/>
+    <param name="traj_server/init_x" value="$(arg init_x)" type="double"/>
+    <param name="traj_server/init_y" value="$(arg init_y)" type="double"/>
+    <param name="traj_server/init_z" value="$(arg init_z)" type="double"/>
+
+    <param name="perception_utils/top_angle"   value="0.56125" type="double"/>
+    <param name="perception_utils/left_angle"  value="0.69222" type="double"/>
+    <param name="perception_utils/right_angle" value="0.68901" type="double"/>
+    <param name="perception_utils/max_dist"    value="4.5"     type="double"/>
+    <param name="perception_utils/vis_dist"    value="1.0"     type="double"/>
+  </node>
+
+  <!-- 触发（RViz 的 2D Nav Goal） -->
+  <node pkg="waypoint_generator" name="waypoint_generator" type="waypoint_generator" output="screen">
+    <remap from="~odom" to="$(arg odom_topic)"/>
+    <remap from="~goal" to="/move_base_simple/goal"/>
+    <remap from="~traj_start_trigger" to="/traj_start_trigger"/>
+    <param name="waypoint_type" value="point"/>
+  </node>
+
+</launch>

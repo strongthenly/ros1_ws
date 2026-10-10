@@ -1,0 +1,21 @@
+goal_pub_topic: "/waypoint_goal"
+odom_topic: "/mavros/local_position/odom"
+# 0 for RVIZ and; 1 for Mavros RC ch10; 2 for constant time
+start_trigger_type: 1
+# trigger after start_trigger_delay (s)
+start_program_delay: 3.0
+# 0 for PATH and 1 for waypoints
+cmd_type: 1
+# the distance threshold for waypoint goal swithcing
+switch_dis: 0.1
+# odom timeout threshold (s)
+odom_timeout: 0.1
+# goal publish dt (s), set to inf if the goal only need to pub once
+publish_dt: 99999.0
+# waypoint distance-based downsampling (m)
+# skip CSV waypoint if distance to last kept waypoint < this value, 0 = no downsample
+# e.g. 0.5 means keep waypoints at least 0.5m apart
+waypoint_downsample_dist: 0.1
+# mission waypoints, must be in the same dimension
+#    waypoints_file_name: "a_working_waypoints.txt"
+#waypoints_file_name: "benchmark_dense.txt"

@@ -1,0 +1,3 @@
+pip3 install pynput
+pip3 install mss
+修改rviz_full_stream.py里面的路径（搜索fouruav）

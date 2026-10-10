@@ -1,0 +1,3 @@
+[submodule "scripts/NX_code"]
+	path = scripts/NX_code
+	url = git@github.com:jihaofly/NX_code.git

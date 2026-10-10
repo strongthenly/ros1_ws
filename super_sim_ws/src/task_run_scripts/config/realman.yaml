@@ -1,0 +1,4 @@
+# 位移监控参数配置
+displacement_threshold: 2.5  # 0.5秒内允许的最大位移（米）
+time_window: 0.5             # 位移计算的时间窗口（秒）
+start_delay_sec: 10.0         # 节点启动接收到数据后，延迟几秒才开始监控报警（秒）

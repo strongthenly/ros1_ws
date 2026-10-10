@@ -1,0 +1,286 @@
+#!/bin/bash
+# ============================================================
+#  一键启动: FAST-LIVO2 + MAVROS + SUPER(执行) + FUEL(决策) + 目标仲裁
+#
+#  架构:  FUEL 只决定"去哪"(frontier) → /exploration_goal
+#         仲裁器限频转发 → /waypoint_goal
+#         SUPER 负责"怎么去"(ROG-Map + MINCO 规划避障) → /planning/pos_cmd
+#         FUEL 自己的 traj_server 输出被改道到 /fuel/pos_cmd_sink(无人订阅),防止抢控制
+#
+#  前置(唯一手动项): Windows 上 AirSim Blocks 已点 Play
+#  前置(建议): PX4 已在 tmux 里跑起来 (make px4_sitl_default none_iris)
+#
+#  用法: bash ~/super_explore_all.sh [pcd] [选项]
+#        pcd           1=退出时保存建图点云 PCD(默认路径见下)  0=不保存(默认)
+#                      等价选项 --pcd
+#        --dry-run     仲裁器只打印不发布(联调前预演,安全)
+#        --no-fuel     只起 SUPER,不启 FUEL 与仲裁器(单独验证 SUPER)
+#        --no-super    只起 FUEL 侧(与 fuel_all.sh 类似,但保留改道)
+#        --no-trigger  不自动触发探索(FUEL 起后停着,等手动发目标)
+#        --print-params 只打印参数解析结果并退出(不启动任何东西,联调前核对用)
+#        N.N           仲裁器最小放行间隔秒数(裸数字,默认 3.0)
+#
+#  例:  bash ~/super_explore_all.sh                 # 正常联调(不存PCD)
+#       bash ~/super_explore_all.sh 1               # 联调 + 退出时保存建图PCD
+#       bash ~/super_explore_all.sh 1 --dry-run     # 存PCD + 预演
+#       bash ~/super_explore_all.sh --no-fuel       # 只调 SUPER
+#
+#  PCD 说明(重要):
+#    点云地图由 FAST-LIVO2 产生(SUPER/rog_map 不写 PCD), 输出到
+#      ~/twin_ws/src/FAST-LIVO2/Log/pcd/all_raw_points.pcd        (原始,较大)
+#      ~/twin_ws/src/FAST-LIVO2/Log/pcd/all_downsampled_points.pcd(抽稀)
+#    必须在关闭时发 SIGINT 才会保存 → **用 bash ~/fuel_stop.sh 关**(它发 SIGINT),
+#    千万不要 kill -9, 否则 PCD 不会落盘。
+#
+#  关闭: bash ~/fuel_stop.sh        # 默认留 master(秒级)
+#        bash ~/fuel_stop.sh --all  # 全停
+# ============================================================
+export ROS_MASTER_URI=http://127.0.0.1:11311
+export ROS_IP=127.0.0.1
+source /opt/ros/noetic/setup.bash
+source ~/twin_ws/devel/setup.bash   2>/dev/null
+source ~/fuel_ws/devel/setup.bash   2>/dev/null
+source ~/super_sim_ws/devel/setup.bash 2>/dev/null
+# ⚠️ 多个工作区会互相覆盖 ROS_PACKAGE_PATH —— 必须手动叠加,否则 rospack 找不到包
+export ROS_PACKAGE_PATH=$HOME/super_sim_ws/src:$HOME/fuel_ws/src:$HOME/twin_ws/src:$ROS_PACKAGE_PATH
+
+# ---- 参数 1: PCD 开关（1=退出时保存建图 PCD, 0=不保存; 默认 0）----
+#   点云地图由 FAST-LIVO2 产生（SUPER/rog_map 不写 PCD），输出到
+#     ~/twin_ws/src/FAST-LIVO2/Log/pcd/{all_raw_points.pcd, all_downsampled_points.pcd}
+#   **必须用 fuel_stop.sh 关闭**（它发 SIGINT 触发 savePCD；kill -9 不保存）
+#
+#   实现说明: 在循环里认第一个"裸 0/1"，因此与选项的先后顺序无关
+#   （`1 --dry-run` 与 `--dry-run 1` 等价），等价选项 --pcd。
+PCD=0
+PCD_SET=0
+DRY=""
+WITH_FUEL=1
+WITH_SUPER=1
+NO_TRIGGER=""
+MIN_INT=3.0
+for a in "$@"; do
+  case "$a" in
+    0|1)            if [ "$PCD_SET" = "0" ]; then PCD="$a"; PCD_SET=1; fi ;;
+    --pcd)          PCD=1; PCD_SET=1 ;;
+    --dry-run)      DRY="yes" ;;
+    --no-fuel)      WITH_FUEL=0 ;;
+    --no-super)     WITH_SUPER=0 ;;
+    --no-trigger)   NO_TRIGGER="yes" ;;
+    --print-params) PRINT_PARAMS=1 ;;
+    -*)             : ;;    # 未知选项忽略
+    *) case "$a" in [0-9]*.[0-9]*) MIN_INT="$a" ;; esac ;;
+  esac
+done
+export PCD_SAVE=$PCD
+
+# ---- --print-params: 只打印解析结果并退出（联调前核对用, 不启动任何东西）----
+if [ "${PRINT_PARAMS:-0}" = "1" ]; then
+  echo "PARAMS pcd=$PCD dry=${DRY:-no} super=$WITH_SUPER fuel=$WITH_FUEL trig=${NO_TRIGGER:-no} min=$MIN_INT"
+  exit 0
+fi
+
+SUPER_CFG=$(rospack find task_run_scripts 2>/dev/null)/config/sim_real_flight.yaml
+FSM_BIN=$HOME/super_sim_ws/devel/lib/super_planner/fsm_node
+BRIDGE_BIN=$HOME/super_sim_ws/devel/lib/super_planner/super_to_px4_bridge
+ARB=$HOME/fuel_ws/src/fuel_bridge/scripts/goal_arbiter.py
+
+say(){ echo "[super_all] $*"; }
+
+# ---------- 0) AirSim ----------
+say "0/7 检查 AirSim (RPC 41451)..."
+if timeout 3 bash -c "echo > /dev/tcp/127.0.0.1/41451" 2>/dev/null; then
+  say "     [OK] AirSim 在 Play"
+else
+  say "     [X] AirSim 不可连 —— 请先在 UE4 Blocks 窗口点绿色 Play，再重跑"; exit 1
+fi
+
+# ---------- 1) twin 链路 (FAST-LIVO2 提供 /cloud_registered) ----------
+say "1/7 启动 twin 链路（FAST-LIVO2 → /cloud_registered，与 SUPER/FUEL 共用；PCD保存=$PCD）..."
+if ! bash ~/twin_livo_fast.sh --full; then
+  say "     [FATAL] twin 链路未就绪（twin_livo_fast.sh --full 返回非零）"
+  say "             上面已打印 PX4 的 tmux 画面和日志尾部 —— 原因就在那。"
+  say "             修好后重跑本脚本即可。"
+  exit 1
+fi
+
+say "     复核 /clock 步进（LockStep 冻结检测）..."
+if timeout 6 rostopic hz /clock 2>/dev/null | grep -q "average"; then
+  say "     [OK] /clock 在走"
+else
+  say "     [X] /clock 不走 → AirSim 未步进（PX4 没连 4560 或没 Play）"
+  say "         这不是\"等不够久\"，是仿真冻住了。查: ss -tn | grep 4560"
+  exit 1
+fi
+
+if timeout 8 rostopic hz /cloud_registered 2>/dev/null | grep -q "average"; then
+  say "     [OK] /cloud_registered 有数据（SUPER 与 FUEL 共用这一路点云）"
+else
+  say "     [X] FAST-LIVO2 无输出 —— 查 tail -20 /tmp/fastlivo.log"; exit 1
+fi
+
+# ---------- 2) PX4 专用 MAVLink（硬检查：SUPER 的 odom 走 MAVROS，没这个必然 No odom）----------
+say "2/7 检查 PX4 专用 MAVLink (14610/14611)..."
+if ss -tln 2>/dev/null | grep -q ":14610"; then
+  say "     [OK] 14610 已在监听"
+else
+  # 步骤 1 的 twin_livo_fast.sh --full 已尝试自动开过；这里再兜一次（幂等，无害）
+  say "     [!] 14610 未监听 → 再尝试自动开启（送进 PX4 的 pxh shell）..."
+  if pgrep -f "bin/px4" >/dev/null 2>&1 && tmux has-session -t px4 2>/dev/null; then
+    tmux send-keys -t px4 "mavlink start -u 14610 -o 14611" Enter 2>/dev/null
+    for i in $(seq 1 10); do
+      ss -tln 2>/dev/null | grep -q ":14610" && break
+      sleep 1
+    done
+  fi
+  if ss -tln 2>/dev/null | grep -q ":14610"; then
+    say "     [OK] 14610 已自动开启"
+  else
+    say "     [X] 14610 仍未监听 → MAVROS 连不上 FCU → SUPER 会一直 'No odom, force return'"
+    if pgrep -f "bin/px4" >/dev/null 2>&1; then
+      say "         PX4 在跑但自动开启失败。看 pxh 画面:"
+      tmux capture-pane -p -t px4 2>/dev/null | tail -6 | sed 's/^/           /'
+      say "         手动: tmux attach -t px4  然后  mavlink start -u 14610 -o 14611"
+    else
+      say "         PX4 根本没在跑。先起 PX4（建议保留会话以便回看）:"
+      say "           tmux new-session -d -s px4"
+      say "           tmux set-option -t px4 remain-on-exit on"
+      say "           tmux send-keys -t px4 'cd ~/PX4-AirSim && make px4_sitl_default none_iris 2>&1 | tee /tmp/px4_run.log' Enter"
+    fi
+    if [ "$WITH_SUPER" = "1" ]; then
+      say "     [FATAL] 要起 SUPER 就必须有 14610（odom 来源）。本次中止。"
+      say "             （只调 FUEL 的话可加 --no-super 跳过此要求）"
+      exit 1
+    else
+      say "     [!] 本次 --no-super，仅起 FUEL，继续（但飞机不会动）"
+    fi
+  fi
+fi
+
+# ---------- 3) MAVROS ----------
+say "3/7 启动 MAVROS（SUPER 的 odom 来自 /mavros/local_position/odom）..."
+if pgrep -f "mavros" > /dev/null 2>&1; then
+  say "     [OK] MAVROS 已在跑"
+else
+  setsid roslaunch mavros px4.launch fcu_url:=udp://:14611@127.0.0.1:14610 \
+      > /tmp/mavros_super.log 2>&1 < /dev/null &
+  sleep 6
+  if rostopic list 2>/dev/null | grep -q "/mavros/state"; then
+    say "     [OK] MAVROS 起来了（日志 /tmp/mavros_super.log）"
+  else
+    say "     [!] MAVROS 未就绪 —— 若 PX4 刚重启过，必须重开 MAVROS"
+  fi
+fi
+
+# ---------- 4) SUPER ----------
+if [ "$WITH_SUPER" = "1" ]; then
+  say "4/7 启动 SUPER（fsm_node + super_to_px4_bridge，配置 sim_real_flight.yaml）..."
+  if [ ! -x "$FSM_BIN" ]; then
+    say "     [X] 找不到 $FSM_BIN —— 先在 ~/super_sim_ws 里 catkin_make"; exit 1
+  fi
+  pkill -f "fsm_node" 2>/dev/null
+  pkill -f "super_to_px4_bridge" 2>/dev/null
+  sleep 1
+  setsid "$FSM_BIN" _config_path:="$SUPER_CFG" > /tmp/super_fsm.log 2>&1 < /dev/null &
+  setsid "$BRIDGE_BIN"            > /tmp/super_bridge.log 2>&1 < /dev/null &
+  sleep 6
+  if pgrep -f "fsm_node" > /dev/null 2>&1; then
+    say "     [OK] fsm_node 在跑（日志 /tmp/super_fsm.log）"
+  else
+    say "     [X] fsm_node 退出 —— tail -20 /tmp/super_fsm.log 看原因"; exit 1
+  fi
+  pgrep -f "super_to_px4_bridge" > /dev/null 2>&1 \
+    && say "     [OK] super_to_px4_bridge 在跑" \
+    || say "     [!] bridge 未在跑（日志 /tmp/super_bridge.log）"
+else
+  say "4/7 跳过 SUPER (--no-super)"
+fi
+
+# ---------- 5) FUEL（输出改道，防抢控制）----------
+if [ "$WITH_FUEL" = "1" ]; then
+  say "5/7 启动 FUEL（traj_server 输出改道到 /fuel/pos_cmd_sink，不抢控制）..."
+  pkill -f "exploration_node" 2>/dev/null
+  pkill -f "traj_server"      2>/dev/null
+  sleep 1
+  setsid roslaunch fuel_bridge fuel_real.launch enable_ctrl:=false \
+      fuel_cmd_topic:=/fuel/pos_cmd_sink \
+      > /tmp/fuel_real_super.log 2>&1 < /dev/null &
+  sleep 8
+  if rostopic list 2>/dev/null | grep -q "/exploration_goal"; then
+    say "     [OK] FUEL 在跑，已发布 /exploration_goal"
+  else
+    say "     [!] 未见 /exploration_goal —— 查 tail -20 /tmp/fuel_real_super.log"
+  fi
+else
+  say "5/7 跳过 FUEL (--no-fuel)"
+fi
+
+# ---------- 6) 目标仲裁器 ----------
+if [ "$WITH_FUEL" = "1" ]; then
+  say "6/7 启动目标仲裁器（FUEL 约 1Hz 换目标 → 限频，避免打断 SUPER 轨迹）..."
+  pkill -f "goal_arbiter" 2>/dev/null; sleep 1
+  setsid python3 "$ARB" _min_interval:=$MIN_INT ${DRY:+_dry_run:=true} \
+      > /tmp/goal_arbiter.log 2>&1 < /dev/null &
+  sleep 4
+  pgrep -f "goal_arbiter" > /dev/null 2>&1 \
+    && say "     [OK] 仲裁器在跑（日志 /tmp/goal_arbiter.log）${DRY:+  [DRY-RUN 模式]}" \
+    || say "     [X] 仲裁器退出 —— cat /tmp/goal_arbiter.log"
+else
+  say "6/7 跳过仲裁器 (--no-fuel)"
+fi
+
+# ---------- 7) 链路自检 + 触发 ----------
+say "7/7 链路自检..."
+sleep 2
+chk_pub(){ rostopic info "$1" 2>/dev/null | sed -n '/Publishers/,/Subscribers/p' | grep -c '\*'; }
+chk_sub(){ rostopic info "$1" 2>/dev/null | sed -n '/Subscribers/,$p' | grep -c '\*'; }
+
+if [ "$WITH_SUPER" = "1" ]; then
+  n=$(chk_pub /planning/pos_cmd)
+  if [ "$n" = "1" ]; then
+    say "     [OK] /planning/pos_cmd 只有 1 个发布者（防抢控制生效，SUPER 独占）"
+  elif [ "$n" = "0" ]; then
+    say "     [!] /planning/pos_cmd 无发布者（SUPER 还没出轨迹，正常；若持续无 → 查 fsm 日志）"
+  else
+    say "     [X] /planning/pos_cmd 有 $n 个发布者 —— FUEL 改道没生效，两条控制链在抢！"
+    say "         立即检查 /tmp/fuel_real_super.log 里 traj_server 的 remap"
+  fi
+fi
+if [ "$WITH_FUEL" = "1" ]; then
+  say "     /exploration_goal 订阅者数: $(chk_sub /exploration_goal)（应为 1 = 仲裁器）"
+  say "     /waypoint_goal   订阅者数: $(chk_sub /waypoint_goal)（应为 1 = fsm_node）"
+fi
+
+if [ "$WITH_FUEL" = "1" ] && [ -z "$NO_TRIGGER" ]; then
+  say "     触发 FUEL 探索（发 /move_base_simple/goal, z>=0 才被接受）..."
+  python3 -c "
+import rospy
+from geometry_msgs.msg import PoseStamped
+rospy.init_node('trigger', anonymous=True)
+p = rospy.Publisher('/move_base_simple/goal', PoseStamped, queue_size=1)
+rospy.sleep(1.5)
+m = PoseStamped(); m.header.frame_id = 'world'
+m.pose.position.x, m.pose.position.y, m.pose.position.z = 3.0, 0.0, 1.0
+m.pose.orientation.w = 1.0
+p.publish(m); rospy.sleep(1.0)
+print('     triggered (3.0, 0.0, 1.0)')
+" 2>/dev/null || say "     [!] 触发失败（rospy 环境问题）"
+fi
+
+say "==================== 完成 ===================="
+say "SUPER 日志   : tail -f /tmp/super_fsm.log   (看 Wait for goal. → Get goal at ... → FOLLOW_TRAJ)"
+say "SUPER 桥日志 : tail -f /tmp/super_bridge.log"
+say "FUEL 日志    : tail -f /tmp/fuel_real_super.log   (看 Next view 与 Cost mat)"
+say "仲裁器日志   : tail -f /tmp/goal_arbiter.log      (看 >>> 放行目标 ... | 原因: ...)"
+say "链路自检     : rostopic info /planning/pos_cmd    (Publishers 必须只有 /fsm_node)"
+say "无人机位置   : rostopic echo /mavros/local_position/pose/pose/position"
+if [ "$PCD" = "1" ]; then
+  say "PCD 保存     : 【已开启】关闭时必须用 bash ~/fuel_stop.sh（它发 SIGINT 触发 savePCD）"
+  say "               ⚠️ kill -9 不会保存！落盘于 ~/twin_ws/src/FAST-LIVO2/Log/pcd/"
+  say "                 all_raw_points.pcd（原始）· all_downsampled_points.pcd（抽稀）"
+else
+  say "PCD 保存     : 关（需要保存点云地图请用: bash ~/super_explore_all.sh 1 ...）"
+fi
+say "关闭         : bash ~/fuel_stop.sh          # 默认留 master（秒级）"
+say "               bash ~/fuel_stop.sh --all    # 全停"
+say ""
+say "提示: 首次联调建议先加 --dry-run 跑一遍，确认仲裁器放行逻辑符合预期再真跑。"

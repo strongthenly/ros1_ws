@@ -1,0 +1,66 @@
+name: 🔐 构建并发布部署包
+
+# ============================================================
+# 方案 C：CI 自动发布
+#   - 开发机 push 到 master -> 自动运行 build_secure.sh
+#   - 将 deploy/ 编译产物发布到 deploy 分支（仅产物，不含源码）
+#   - 部署机 `git clone -b deploy` 即可获得可运行包
+# ============================================================
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:        # 支持手动触发重编
+
+permissions:
+  contents: write           # 允许 GITHUB_TOKEN 推送 deploy 分支
+
+jobs:
+  build:
+    name: 编译并发布 deploy 分支
+    # ⚠️ 产物必须是 cpython-38-aarch64，只能在 aarch64 + Python3.8 环境编译
+    # 请在本仓库 Settings -> Actions -> Runners 注册 NX 机为 self-hosted，
+    # 标签：self-hosted, linux, aarch64（NX 上已装 Cython/gcc）
+    runs-on: [ self-hosted, linux, aarch64 ]
+
+    steps:
+      - name: 检出源码 (master)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检查编译环境
+        run: |
+          python3 --version
+          uname -m
+          python3 -c "import Cython; print('Cython OK')" || pip3 install --user cython
+          command -v gcc >/dev/null && gcc --version | head -1 || sudo apt-get install -y gcc
+
+      - name: 安全打包 (build_secure.sh -> deploy/)
+        run: |
+          bash build_secure.sh deploy
+          echo "===== deploy/ 内容 ====="
+          ls -la deploy/
+
+      - name: 发布到 deploy 分支（仅编译产物，不含源码）
+        run: |
+          set -euo pipefail
+          SRC_SHA="${GITHUB_SHA:0:12}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 孤儿分支，仅包含 deploy/ 编译产物
+          git checkout --orphan deploy_tmp
+          git rm -rf . >/dev/null 2>&1 || true
+          cp -r deploy/. .
+          # deploy/.gitignore 会忽略 *.so，发布分支必须移除，确保编译产物入库
+          rm -f .gitignore
+          rm -rf __pycache__
+
+          git add -A
+          git commit -m "🚀 部署包 (源码 ${SRC_SHA}) · $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push --force origin deploy_tmp:deploy
+          git checkout -f master
+          git branch -D deploy_tmp
+
+          echo "✅ 已发布 deploy 分支: $(git rev-parse --short origin/deploy)"

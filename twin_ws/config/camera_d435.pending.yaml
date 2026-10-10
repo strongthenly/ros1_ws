@@ -1,0 +1,13 @@
+twin_status: pending_calibration
+cam_model: Pinhole
+cam_width: null
+cam_height: null
+scale: 1.0
+cam_fx: null
+cam_fy: null
+cam_cx: null
+cam_cy: null
+cam_d0: null
+cam_d1: null
+cam_d2: null
+cam_d3: null

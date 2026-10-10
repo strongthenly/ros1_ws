@@ -1,0 +1,191 @@
+fsm:
+  click_goal_en: true #允许通过RVIZ等工具点击设置目标点
+  click_goal_topic: "/move_base_simple/goal" #订阅​​目标点​​消息的ROS话题名称
+  click_height: 1.0 #点击设置目标点时，未指定高度时的​​默认高度​​（米）
+  click_yaw_en: true #设置目标点时是否同时设置​​偏航角​​（朝向）
+  replan_rate: 15.0 #重规划频率​​（Hz），即每秒尝试重新规划轨迹的次数
+  cmd_topic: "/planning/pos_cmd" #发布​​位置控制指令​​的ROS话题
+  mpc_cmd_topic: "/planning_cmd/poly_traj" #发布​​多项式轨迹​​（供MPC控制器使用）的ROS话题
+  timer_en: true #启用定时器，驱动状态机运行
+
+super_planner:
+  backup_traj_en: true #启用备份轨迹​​。在主规划失败时提供一条安全的退路
+  detailed_log_en: false #
+  visualization_en: true #
+  use_fov_cut: false #
+  print_log: false #
+  visual_process: false #
+  frontend_in_known_free: false #
+  goal_yaw_en: true #
+  goal_vel_en: true #
+  corridor_bound_dis: 1.0 #
+  corridor_line_max_length: 1.2 #
+  safe_corridor_line_max_length: 5.0 #
+  iris_iter_num: 2 #
+  obs_skip_num: 2 #
+  replan_forward_dt: 0.1 #重规划时向前看的时间间隔（秒）
+  planning_horizon: 7.0 #规划视距​​（秒），规划器计算未来多长时间的轨迹
+  sensing_horizon: -1 #
+  receding_dis: 4.0 #
+  robot_r: 0.40 #将无人机视为​​球形障碍物​​的半径（米），用于碰撞检测
+  yaw_dot_max: 2.5 #无人机最大​​偏航角速度​​（1弧度/57.3秒）
+  # Yaw mode: 1 heading to velocity, 2 heading to goal
+  yaw_mode: 2 #​​偏航角控制模式​​。1: 机头朝向速度方向；2: 机头朝向目标点
+  mpc_horizon: 15 #模型预测控制(MPC)的​​预测步长​
+
+
+traj_opt:
+  switch:
+    save_log_en: false #
+    print_optimizer_log: false #
+
+  boundary:
+    max_vel: 1.2 #最大速度 (m/s)  
+    max_acc: 2.0 #最大加速度 (m/s²) 
+    max_jerk: 50.0 #最大加加速度 (Jerk, m/s³)
+    max_omg: 2.5 #最大偏航角速度 (rad/s)
+    max_acc_thr: 20 #最大加速度阈值 (m/s²)
+    min_acc_thr: 0.5 #最小加速度阈值 (m/s²)
+    penna_margin: 0.1 #平滑边界的边距 (m)
+
+  exp_traj:
+    # 1 for xi 2 for pos
+    pos_constraint_type: 1 #位置约束类型 
+    # 1这意味着优化器不仅要求轨迹在特定时间点 t_i​​精确经过目标位置点 p_i​​，还可能会同时约束该点的速度 v_i、加速度 a_i等状态分量（取决于状态向量的定义）。这提供了一种​​更精确、更严格的控制方式​​。
+    # 2优化器​​只约束位置（p）​​。它只要求轨迹在特定时间点 t_i​​精确经过目标位置点 p_i​​，而对无人机在 p_i点的速度 v_i、加速度 a_i等状态分量不做硬性要求。优化器会尽量让这些高阶状态量平滑变化。
+
+    energy_cost_type: 4 #能量成本类型
+    block_energy_cost: false #是否阻止能量成本
+    opt_accuracy: 5.0e-6 #优化精度
+    scale_factor: 1.0 #缩放因子
+    integral_reso: 15 #积分分辨率
+    smooth_eps: 0.01 #平滑误差
+    penna_t: 12000.0 #平滑时间
+    penna_pos: 5.0e+6 #位置跟踪误差的权重
+    penna_vel: 5.0e+5 #速度平滑的权重
+    penna_acc: 5.0e+5 #加速度平滑的权重
+    penna_jerk: -5.0e+5 #加加速度平滑的权重
+    penna_attract: 1.0e+3 #终点吸引力​​的权重。确保轨迹能准确到达目标点。
+    penna_omg:  5.0e+5 #偏航角平滑的权重
+    penna_thr: 1.0e+5 #阈值平滑的权重
+
+  backup_traj:
+    uniform_time_en: true #
+    pos_constraint_type: 1 #
+    piece_num: 2 #
+    energy_cost_type: 4 #
+    block_energy_cost: true #
+    opt_accuracy: 1.0e-6 #
+    scale_factor: 1.0 #
+    integral_reso: 12 #
+    smooth_eps: 0.01 #
+    penna_t: 1200.0 #
+    penna_ts: 1.0e+5 #
+    penna_pos: 1.0e+6 # ​​轨迹跟踪误差​​的权重。权重高意味着优化器会极力让轨迹紧紧跟随规划器给出的路径点。
+    penna_vel: 1.0e+5 #速度、加速度平滑度​​的权重。权重高意味着优化出的轨迹速度、加速度变化会更平滑，能耗更低。
+    penna_acc: 1.0e+5 #
+    penna_jerk: -1.0e+5 #加加速度平滑度​​的权重（负号可能表示一种特定的优化形式或约束）。
+    penna_omg: 1.0e+5 #
+    penna_thr: 1.0e+5 #
+
+  flatness:
+    mass: 2.08 #
+    dh: 0.35 #
+    dv: 0.35 #
+    cp: 0.001 #
+    v_eps: 0.0001 #
+    grav: 9.81 #
+
+
+astar:
+  map_voxel_num: [ 500, 500, 100 ] #
+  visual_process: false #
+  allow_diag: true #
+  # 0 DIAG; 1 MANHATTAN; 2 EUCLIDEAN
+  heu_type: 2 #
+  debug_visualization_en: false #
+
+
+rog_map:
+  resolution: 0.1 #地图的​​分辨率​​（米/格），值越小地图越精细，计算量越大
+  inflation_resolution: 0.2 #​​障碍物膨胀层​​的分辨率，用于保持安全距离
+  inflation_step: 2 #
+  unk_inflation_en: false #
+  unk_inflation_step: 1 #
+  map_size: [ 50,50,6 ] #地图的尺寸（长、宽、高，单位：米）
+  # If the map rolling is disable, the map origin [m] should be set.
+  fix_map_origin: [ 0,0,1.5 ] #
+  frontier_extraction_en: false #
+
+  # Virtual ceil and ground
+  virtual_ceil_height: 3 #定义地图的有效高度范围。
+  virtual_ground_height: -0.9 #
+
+  load_pcd_en: false #
+
+  map_sliding:
+    # 是否启用​​地图滑动​​及其阈值。启用后，当地图中心与无人机距离超过threshold(0.3米)时，
+    # 地图会滑动更新，使无人机始终处于地图中心附近，实现“无限”地图。
+    enable: true
+    # The minimum distance [m] to slide the map.
+    threshold: 0.3
+
+  esdf:
+    enable: false
+    resolution: 0.1
+    # The range of esdf around the odom [m].
+    local_update_box: [ 5,5,3 ]
+
+  # If [enable = true], the ROG-Map will actively take ros topic as input.
+  #  else user should call function [updateMap] to update the map.
+  ros_callback:
+    enable: true
+    # cloud_topic: "/cloud_registered"
+    cloud_topic: "/odin1/cloud_slam"
+    odom_topic: "/mavros/local_position/odom"
+    odom_timeout: 2.0
+
+
+  visualization:
+    enable: true
+    # when enabled, use rqt_reconfigure to change the visualization parameters.
+    use_dynamic_reconfigure: false
+    # The rate of visualization [Hz], if set to 0, the visualization will not be triggered by frame.
+    time_rate: 2
+    # The frame rate of visualization [Hz], if set to 0, the visualization will not be triggered by frame.
+    frame_rate: 0
+    # visualization range along the odom [m].
+    range: [ 15, 15,4 ]
+    frame_id: "world"
+    pub_unknown_map_en: false
+
+  # Intensity filter for input point cloud. If the point intensity is less than this value,
+  # it will be ignored (to avoid noise like dusk).
+  intensity_thresh: -10 #点云​​强度过滤阈值​​，低于此值的点（如灰尘）被视为噪声
+  # The temporal downsample rate for input point cloud.
+  #  e.g. if set to k, the point cloud will be downsampled to 1/k.
+  point_filt_num: 1
+
+  # Probabilistc update
+  raycasting:
+    #如果禁用，地图将仅保留已占用的信息，所有其他网格将被视为未知。
+    enable: false
+    batch_update_size: 1
+    local_update_box: [ 100,100,5 ]
+    # The range of raycasting [m].
+    ray_range: [0.5, 100 ]
+
+    p_min: 0.12
+    p_miss: 0.49
+    p_free: 0.499
+    p_occ: 0.85
+    p_hit: 0.9
+    p_max: 0.98
+#将未占用的inf映射网格视为空闲的阈值。[0.0-1.0]对于计数器映射，如果prob映射中每个单元格包含N个单元格，则只有当N_unk>N*unk_thresh单元格未知时，该单元格才会被视为未知。
+#示例：1）如果unk_thresh设置为0.0，则一旦prob映射中的至少一个单元格未知，
+#该细胞将被视为未知。
+#2）如果unk_thresh设置为1.0，则只有prob映射中的所有单元格都是未知的，
+#该细胞将被视为未知。
+#总之，1.0更激进，而0.0更保守。
+    unk_thresh: 1.0
+

@@ -1,0 +1,12 @@
+status: pending_px4_topology
+px4_version: null
+firmware_git_hash: null
+estimator: null
+fcu_url: null
+gcs_url: null
+mavlink_system_id: null
+mavlink_component_id: null
+offboard_input_topic: null
+odometry_feedback_topic: null
+failsafe_behavior_verified: false
+notes: "Do not mark verified until the PX4/AirSim/MAVROS ports have been checked for conflicts."

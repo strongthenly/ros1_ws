@@ -1,0 +1,9 @@
+<launch>
+  <!-- Odin 专用包装：复用 real_flight.launch 模板，仅覆盖 fsm 配置与 rviz 配置。
+       fsm 配置 odin_real_flight.yaml（Odin 专用，订阅 /odin1/cloud_slam）；
+       rviz 用 top_down.rviz（GlobalCloud 订阅 /odin1/cloud_slam）。 -->
+  <include file="$(find task_run_scripts)/launch/real_flight.launch">
+    <arg name="config_path" value="$(find task_run_scripts)/config/odin_real_flight.yaml"/>
+    <arg name="rviz_config" value="$(find task_run_scripts)/rviz/top_down.rviz"/>
+  </include>
+</launch>

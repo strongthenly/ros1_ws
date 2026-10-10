@@ -1,0 +1,14 @@
+# NX 端自定义命令配置文件
+UserCmd1:
+  name: "SUPER航点任务"
+  # SUPER 已编译进 catkin_ws；运行日志输出到 task_run_scripts/log/real_flight.log 便于 tail -f 查看
+  command: "source /opt/ros/noetic/setup.bash && source /home/fouruav/catkin_ws/devel/setup.bash && mkdir -p /home/fouruav/catkin_ws/src/task_run_scripts/log && (nohup rosrun task_run_scripts global_path_publisher.py _file:=/home/fouruav/catkin_ws/src/task_run_scripts/data_guidepoints/guidepoints_new.txt > /home/fouruav/catkin_ws/src/task_run_scripts/log/global_path_publisher.log 2>&1 &) && sleep 1 && (nohup roslaunch task_run_scripts real_flight.launch config_path:=/home/fouruav/catkin_ws/src/task_run_scripts/config/mid360_real_flight.yaml rviz_config:=/home/fouruav/catkin_ws/src/task_run_scripts/rviz/mid360_top_down.rviz use_waypoint:=true waypoint_data_path:=/home/fouruav/catkin_ws/src/task_run_scripts/data_guidepoints/endpoint.txt > /home/fouruav/catkin_ws/src/task_run_scripts/log/real_flight.log 2>&1 &)"
+
+UserCmd2:
+  name: "停止SUPER(先定点再杀进程)"
+  # 先切定点模式保安全，等1秒后再杀SUPER进程
+  command: "rosservice call /mavros/set_mode '{custom_mode: \"POSCTL\"}' 2>/dev/null || true; sleep 1; pkill -SIGINT -f 'real_flight[.]launch' 2>/dev/null; sleep 2; pkill -f 'fsm_[n]ode' 2>/dev/null; pkill -f 'super_to_px4_bridg[e]' 2>/dev/null; pkill -f 'waypoint_missio[n]' 2>/dev/null; pkill -f 'map_to_worl[d]' 2>/dev/null; pkill -f 'top_down[.]rviz' 2>/dev/null; echo button2_done"
+
+UserCmd3:
+  name: "按钮3"
+  command: "空按钮"

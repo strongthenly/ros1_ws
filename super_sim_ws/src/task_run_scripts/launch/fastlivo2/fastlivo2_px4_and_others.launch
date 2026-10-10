@@ -1,0 +1,19 @@
+<launch>
+      <!-- fastlivo2/Mid360 版 px4_and_others：px4 + mavros + realman + static tf
+           （由 start_fastlivo2.sh 引用；不含 Odin 里程计转发，与 odin 版解耦） -->
+
+      <include file="$(find task_run_scripts)/launch/px4.launch" />
+
+      <node name="send_initial_mav_command"
+          pkg="mavros"
+          type="mavcmd"
+          args="long 511 32 15000 0 0 0 0 0"
+          launch-prefix="bash -c 'sleep 1; $0 $@'"/>
+
+      <include file="$(find task_run_scripts)/launch/realman.launch" />
+
+      <node pkg="tf" type="static_transform_publisher" name="odom_to_map_broadcaster" 
+          args="0 0 0 0 0 0 map odom  100" />
+    <node pkg="tf" type="static_transform_publisher" name="camera_initial_to_map_broadcaster" 
+        args="0 0 0 0 0 0 map camera_init  100" />
+</launch>

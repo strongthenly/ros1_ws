@@ -1,0 +1,46 @@
+version: 1
+length_unit: meter
+angular_velocity_unit: radian_per_second
+acceleration_unit: meter_per_second_squared
+time:
+  basis: AirSim_simulation_nanoseconds
+  ros_clock: /clock
+  lidar_header: first_point_acquisition_time
+  lidar_offset_time_unit: nanosecond
+  restart_estimator_on_time_reset: true
+frames:
+  AirSim_body: FRD
+  ROS_body: FLU
+  FRD_to_FLU: [[1,0,0],[0,-1,0],[0,0,-1]]
+  camera_optical: x_right_y_down_z_forward
+  world_ros: ENU
+  world_airsim: NED
+  NED_to_ENU: [[0,1,0],[1,0,0],[0,0,-1]]
+truth:
+  allowed_namespace: /twin/ground_truth
+  estimator_input: forbidden
+lidar:
+  preview_topic: /twin/lidar/points_preview
+  timed_source_topic: /twin/lidar/points_timed
+  estimator_topic: /livox/lidar
+  estimator_type: livox_ros_driver/CustomMsg
+  required_fields: [x, y, z, offset_time, reflectivity, tag, line]
+  timing_source: actual_simulated_ray_acquisition
+  infer_time_from_point_index: false
+  hardware_pattern: pending
+imu:
+  preview_topic: /twin/imu/data_raw
+  algorithm_topic: /livox/imu
+  source: pending_real_imu_selection
+  publish_ground_truth_orientation: false
+camera:
+  preview_rgb: /twin/camera/color/image_raw
+  algorithm_rgb: /left_camera/image
+  preview_depth: /twin/camera/depth/image_raw
+  rgb_encoding: rgb8
+  depth_encoding: 32FC1
+  intrinsics: pending_real_calibration
+control:
+  transport: MAVROS_to_PX4
+  enabled: false
+  requires: [PX4_version, MAVLink_endpoint_allocation, estimator_fusion_config, frame_and_timestamp_validation]

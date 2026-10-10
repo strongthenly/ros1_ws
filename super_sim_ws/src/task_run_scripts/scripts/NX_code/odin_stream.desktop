@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Odin Screen Stream
+Comment=Auto start screen stream for QGC
+# 🌟 核心：先加载 ROS 环境，再执行我们的不死看门狗脚本
+Exec=bash -c "source /opt/ros/noetic/setup.bash && source /home/fouruav/odin_ws/devel/setup.bash && /usr/bin/python3 /home/fouruav/odin_ws/src/task_run_scripts/scripts/toQGC/rviz_full_stream.py"
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true

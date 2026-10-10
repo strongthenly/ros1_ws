@@ -1,0 +1,13 @@
+# 机型 B: MID-360 360° 激光雷达(前倾 20° 安装, 外参在 TF 中)
+cloud_topic: /cloud_registered   # 用 FAST-LIVO2 校正后点云(camera_init系), 有 camera_init->aft_mapped TF
+target_frame: aft_mapped   # fast_livo 机体帧(0°=机头); 需 launch 中 livox_frame->aft_mapped 静态TF
+num_bins: 36
+h_fov_deg: 360.0           # 360° 全覆盖
+height_band: 1.5
+range_min: 0.2
+range_max: 20.0
+accumulation_window: 0.2   # livox 10Hz, 窗口≥2帧避免闪烁
+publish_rate: 20.0
+max_cloud_age: 0.5
+angle_sign: -1.0           # PX4 约定: 俯视顺时针为正; 若左右镜像改为 1.0
+debug_markers: true

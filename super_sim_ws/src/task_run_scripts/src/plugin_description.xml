@@ -1,0 +1,5 @@
+<library path="lib/libview_reset_panel">
+  <class name="task_run_scripts/ViewReset" type="task_run_scripts::ViewResetPanel" base_class_type="rviz::Panel">
+    <description>保存/恢复 rviz 视角（一键回到保存视角）</description>
+  </class>
+</library>

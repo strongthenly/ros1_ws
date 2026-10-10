@@ -1,0 +1,130 @@
+# ============================================
+# 雷达启动/关闭统一配置
+# ============================================
+# 用法：
+#   1. 修改 active_profile 切换雷达类型
+#   2. 可通过环境变量 LIYUMEN_RADAR_PROFILE 覆盖
+#   3. 每个 profile 可自定义启动命令和清理规则
+# ============================================
+
+# 当前激活的雷达模式
+# 可选值: "odin", "mid360"
+# 可通过环境变量 LIYUMEN_RADAR_PROFILE 覆盖
+active_profile: "mid360"
+
+profiles:
+
+  # -------------------- Odin 激光雷达 --------------------
+  odin:
+    display_name: "Odin 激光雷达"
+    # 图像话题（Odin 自带相机）
+    image_topic: "/odin1/image/undistorted"
+
+    # 带 MindCloud 录数据
+    launch_with_cloud:
+      command: >
+        source /opt/ros/noetic/setup.bash &&
+        source /home/fouruav/catkin_ws/devel/setup.bash &&
+        roslaunch odin_ros_driver odin1_ros1.launch
+        > /home/fouruav/.cache/liyumen/log/odin_launch.log 2>&1 &
+        sleep 9 &&
+        roslaunch task_run_scripts px4_and_others.launch
+        > /home/fouruav/.cache/liyumen/log/px4_others_launch.log 2>&1 &
+        sleep 12 &&
+        python3 /home/fouruav/catkin_ws/src/task_run_scripts/scripts/NX_code/odom_to_mavros.py
+        > /home/fouruav/.cache/liyumen/log/odom2mav.log 2>&1
+      recorddata: 1
+      recorddata_yaml: "/home/fouruav/catkin_ws/src/odin_ros_driver/config/control_command.yaml"
+
+    # 不带 MindCloud
+    launch_without_cloud:
+      command: >
+        source /opt/ros/noetic/setup.bash &&
+        source /home/fouruav/catkin_ws/devel/setup.bash &&
+        roslaunch odin_ros_driver odin1_ros1.launch
+        > /home/fouruav/.cache/liyumen/log/odin_launch.log 2>&1 &
+        sleep 9 &&
+        roslaunch task_run_scripts px4_and_others.launch
+        > /home/fouruav/.cache/liyumen/log/px4_others_launch.log 2>&1 &
+        sleep 12 &&
+        python3 /home/fouruav/catkin_ws/src/task_run_scripts/scripts/NX_code/odom_to_mavros.py
+        > /home/fouruav/.cache/liyumen/log/odom2mav.log 2>&1
+      recorddata: 0
+      recorddata_yaml: "/home/fouruav/catkin_ws/src/odin_ros_driver/config/control_command.yaml"
+
+    # 关闭时的清理规则（pattern 回退用）
+    cleanup:
+      pkill_patterns:
+        - "px4_and_others.launch"
+        - "odin1_ros1.launch"
+        - "host_sdk_sample"
+        - "odom_to_mavros"
+        - "cloud_reprojection_node"
+        - "image_overlay_node"
+        - "pcd2depth_node"
+        - "roslaunch mavros"
+      rosnode_patterns:
+        - "mavros"
+        - "pcd2depth_node"
+        - "/rviz"
+        - "odom_to_mavros_node"
+
+  # -------------------- Mid360 激光雷达 --------------------
+  mid360:
+    display_name: "Mid360 激光雷达 (Fast-LIVO2)"
+    # 图像话题（通常为 D435 相机）
+    image_topic: "/camera/color/image_raw"
+
+    # 带 MindCloud 录数据
+    launch_with_cloud:
+      command: >
+        bash /home/fouruav/catkin_ws/src/task_run_scripts/scripts/NX_code/start_fastlivo2.sh true
+        > /home/fouruav/catkin_ws/src/task_run_scripts/log/fastlivo2_launch.log 2>&1
+      recorddata: 0   # Mid360 不需要 recorddata 配置
+
+    # 不带 MindCloud
+    launch_without_cloud:
+      command: >
+        bash /home/fouruav/catkin_ws/src/task_run_scripts/scripts/NX_code/start_fastlivo2.sh false
+        > /home/fouruav/catkin_ws/src/task_run_scripts/log/fastlivo2_launch.log 2>&1
+      recorddata: 0
+
+    cleanup:
+      pkill_patterns:
+        # --- Fast-LIVO2 核心 ---
+        - "mid360_imu_tf.launch"
+        - "roslaunch task_run_scripts"
+        - "imu_tf_node"
+        - "msg_MID360s.launch"
+        - "msg_MID360.launch"
+        - "livox_ros_driver2"
+        - "roslaunch livox_ros_driver2"
+        - "fast_livo mapping_MID360.launch"
+        - "republish"
+        - "lib/rviz"   # 仅匹配 rviz 可视化节点，勿用 "rviz" 以免误杀 rviz_full_stream 推流服务
+        # --- px4_and_others 相关 ---
+        - "px4_and_others.launch"
+        - "px4.launch"
+        - "roslaunch mavros"
+        - "mavros_node"
+        - "odom_to_mavros"
+        - "realman_monitor"
+        - "odom_to_map_broadcaster"
+        - "static_transform_publisher"
+        # --- 相机 ---
+        - "rs_camera.launch"
+        - "realsense2_camera"
+      rosnode_patterns:
+        - "imu_tf"
+        - "livox"
+        - "host_sdk_sample"
+        - "livox_lidar_publisher2"
+        - "laserMapping"
+        - "republish"
+        - "mavros"
+        - "odom_to_mavros"
+        - "odom_throttle_node"
+        - "odom_to_map_broadcaster"
+        - "realman_monitor"
+        - "/rviz"   # 仅匹配根命名空间的 rviz 节点
+        - "realsense2_camera"

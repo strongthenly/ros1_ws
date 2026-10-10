@@ -1,0 +1,34 @@
+<launch>
+<!-- Launch file for Livox AVIA LiDAR -->
+
+	<arg name="rviz" default="true" />
+	<!-- MindCloud 开关：true=录制数据输出 pcd；false=仅建图不录制（默认）。
+	     由 start_fastlivo2.sh 传入的 true/false 参数控制 -->
+	<arg name="pcd_save" default="false" />
+
+	<!-- 建图质量模式切换：
+	     MID360_Fly_Lidar.yaml = 🗺️ 高质量建图（精度优先，算力约2倍）
+	     MID360_Fly.yaml       = 🚁 飞行定位（实时/低算力）
+	     命令行切换：roslaunch task_run_scripts mapping_MID360.launch config_name:=MID360_Fly.yaml -->
+	<arg name="config_name" default="MID360_Fly_Lidar.yaml" />
+
+	<!-- <rosparam command="load" file="$(find fast_livo)/config/MID360.yaml" /> -->
+	<rosparam command="load" file="$(find task_run_scripts)/config/$(arg config_name)" />
+	<!-- 依据 pcd_save 参数覆盖 pcd_save/pcd_save_en -->
+	<group if="$(arg pcd_save)">
+		<rosparam param="pcd_save/pcd_save_en">true</rosparam>
+	</group>
+	<group unless="$(arg pcd_save)">
+		<rosparam param="pcd_save/pcd_save_en">false</rosparam>
+	</group>
+	<node pkg="fast_livo" type="fastlivo_mapping" name="laserMapping" output="screen">
+		<rosparam file="$(find task_run_scripts)/config/camera_self.yaml" />
+	</node>
+	
+	<group if="$(arg rviz)">
+		<!-- 去掉 launch-prefix="nice"：避免 rviz 以低优先级启动，在系统繁忙时弹出缓慢 -->
+		<node pkg="rviz" type="rviz" name="rviz" args="-d $(find task_run_scripts)/rviz/slam_rviz.rviz" />
+	</group>
+	
+	<!-- <node pkg="image_transport" type="republish" name="republish" args="compressed in:=/usb_cam/image_raw raw out:=/usb_cam/image_raw" output="screen" respawn="true"/> -->
+</launch>

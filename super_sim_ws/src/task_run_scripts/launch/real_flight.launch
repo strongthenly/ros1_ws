@@ -1,0 +1,40 @@
+<launch>
+  <arg name="use_waypoint" default="true"/>
+  <!-- fsm 配置路径：可自由指定绝对路径。
+       默认指向 task_run_scripts/config/real_flight.yaml；
+       需要时在命令行覆盖：roslaunch task_run_scripts real_flight.launch config_path:=/xxx/yyy.yaml -->
+  <arg name="config_path" default="$(find task_run_scripts)/config/real_flight.yaml"/>
+  <arg name="waypoint_data" default="real_mission.txt"/>
+  <!-- 航点任务配置/数据路径：默认指向 task_run_scripts，可自由覆盖
+       roslaunch task_run_scripts real_flight.launch waypoint_config_path:=/x/y.yaml waypoint_data_path:=/x/data.txt -->
+  <arg name="waypoint_config_path" default="$(find task_run_scripts)/config/waypoint.yaml"/>
+  <arg name="waypoint_data_path" default="$(find task_run_scripts)/data/$(arg waypoint_data)"/>
+  <!-- RViz 配置文件：模板参数，odin/mid360 包装通过该参数传入各自专用配置 -->
+  <arg name="rviz_config" default="$(find task_run_scripts)/rviz/top_down.rviz"/>
+
+  <!-- FSM 节点 (config_path 支持绝对路径，优先于 config_name) -->
+  <node pkg="super_planner" name="fsm_node" type="fsm_node" output="screen">
+    <param name="config_path" value="$(arg config_path)" type="string"/>
+  </node>
+  
+
+  <!-- PX4 Bridge 节点 -->
+  <node pkg="super_planner" type="super_to_px4_bridge" name="super_to_px4_bridge" output="screen">
+    <rosparam command="load" file="$(find task_run_scripts)/config/super_to_px4_bridge.yaml"/>
+  </node>
+
+  <!-- 航点任务节点 (可选) -->
+  <node pkg="mission_planner" type="waypoint_mission" name="waypoint_mission" output="screen"
+        if="$(arg use_waypoint)">
+    <param name="config_path" value="$(arg waypoint_config_path)" type="string"/>
+    <param name="data_path" value="$(arg waypoint_data_path)" type="string"/>
+  </node>
+
+  <!-- 静态 TF: map -> world (frame_id 不要加前导斜杠，否则与 map/odom 树断开) -->
+  <node pkg="tf" type="static_transform_publisher" name="map_to_world"
+        args="0 0 0 0 0 0 map world 1000"/>
+
+  <!-- RViz (实机模式) -->
+  <node pkg="rviz" type="rviz" name="rviz"
+        args="-d $(arg rviz_config)" output="log"/>
+</launch>

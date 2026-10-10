@@ -1,0 +1,5 @@
+<launch>
+  <node pkg="super_planner" type="super_to_px4_bridge" name="super_to_px4_bridge" output="screen">
+    <rosparam command="load" file="$(find super_planner)/config/super_to_px4_bridge.yaml" />
+  </node>
+</launch>

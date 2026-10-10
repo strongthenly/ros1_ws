@@ -1,0 +1,324 @@
+#!/bin/bash
+# ============================================================
+#  fuel_bridge 冒烟测试（canonical test）
+#  覆盖: 输入桥转发 / seed 悬停 / 未对齐防撞 / 坐标系朝向对齐
+#  用法: bash ~/fuel_ws/src/fuel_bridge/test/smoke_test.sh
+#  说明: 起独立 master 跑话题级验证，不依赖 AirSim/PX4。
+#        分两个桥实例，因为 pos_cmd 一发就永久离开 seed 阶段。
+# ============================================================
+source /opt/ros/noetic/setup.bash 2>/dev/null
+source ~/fuel_ws/devel/setup.bash 2>/dev/null
+D=~/fuel_ws/src/fuel_bridge
+FAIL=0
+ok(){ echo "  PASS $1"; }
+no(){ echo "  FAIL $1"; FAIL=1; }
+
+echo "===== A) 静态 ====="
+# 先清掉本测试可能残留的进程/端口，避免上一轮干扰（防 flaky）
+pkill -f fuel_input_bridge 2>/dev/null
+pkill -f fuel_ctrl_bridge 2>/dev/null
+pkill -f "rosmaster --core -p 1135" 2>/dev/null
+sleep 1
+
+python3 -c "import ast;ast.parse(open('$D/scripts/fuel_input_bridge.py').read())" && ok "fuel_input_bridge.py 语法" || no "input_bridge 语法"
+python3 -c "import ast;ast.parse(open('$D/scripts/fuel_ctrl_bridge.py').read())"  && ok "fuel_ctrl_bridge.py 语法"  || no "ctrl_bridge 语法"
+python3 -c "import xml.etree.ElementTree as E;E.parse('$D/launch/fuel_real.launch')" && ok "fuel_real.launch XML" || no "launch XML"
+for s in fuel_all fuel_stop fuel_frame_check fuel_align_check fuel_map_check; do
+  bash -n "$D/scripts/$s.sh" && ok "$s.sh 语法" || no "$s.sh 语法"
+done
+grep -q "if not self.aligned():" "$D/scripts/fuel_ctrl_bridge.py" && ok "含未对齐防撞保险" || no "缺防撞保险"
+grep -q "_next_action" "$D/scripts/fuel_ctrl_bridge.py" && ok "含 arm/模式动作节流" || no "缺节流"
+A=~/fuel_ws/src/FUEL/fuel_planner/exploration_manager/launch/algorithm.xml
+grep -q 'obstacles_inflation"     value="0.45"' "$A" && ok "FM 防撞: 障碍膨胀 0.45" || no "障碍膨胀未调"
+grep -q 'max_ray_length" value="8.0"'          "$A" && ok "FM 防撞: 感知 8.0m"   || no "感知距离未调"
+grep -q 'clearance_threshold" value="0.45"'    "$A" && ok "FM 防撞: 安全间隙 0.45" || no "安全间隙未调"
+grep -qE 'arg name="max_vel" value="0.8"' "$D/launch/fuel_real.launch" && ok "FM 防撞: 限速 0.8m/s" || no "限速未调"
+grep -qE 'init_z" +default="\$\(arg seed_z\)' "$D/launch/fuel_real.launch" && ok "init_z 继承 seed_z" || no "init_z 未继承"
+
+master(){ export ROS_MASTER_URI=http://127.0.0.1:$1
+  pkill -f "rosmaster --core -p $1" 2>/dev/null; sleep 1
+  setsid rosmaster --core -p $1 >/dev/null 2>&1 </dev/null & sleep 3; }
+cleanup(){ pkill -f fuel_input_bridge 2>/dev/null; pkill -f fuel_ctrl_bridge 2>/dev/null; }
+
+# ---------- 实例1: 输入桥 + seed 悬停 + 未对齐防撞 ----------
+echo ""
+echo "===== B) 实例1（align_samples=1000，对齐不完成）====="
+master 11351
+setsid rosrun fuel_bridge fuel_input_bridge.py >/tmp/sm_in.log 2>&1 </dev/null &
+setsid rosrun fuel_bridge fuel_ctrl_bridge.py _auto_offboard:=false _seed_z:=1.5 _align_samples:=1000 >/tmp/sm_c1.log 2>&1 </dev/null &
+sleep 5
+pgrep -f fuel_input_bridge >/dev/null && ok "输入桥在跑" || no "输入桥未起"
+pgrep -f fuel_ctrl_bridge  >/dev/null && ok "控制桥在跑" || no "控制桥未起"
+
+python3 - <<'PY' || FAIL=1
+import sys, rospy
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import PointCloud2
+from quadrotor_msgs.msg import PositionCommand
+rospy.init_node('sm1', anonymous=True, disable_signals=True)
+F=[]
+def ck(c,m): print("  %s %s" % ("PASS" if c else "FAIL", m)); F.append(c)
+od,ps,cl,sp=[],[],[],[]
+rospy.Subscriber('/odom_world',Odometry,lambda m:od.append(m))
+rospy.Subscriber('/map_ros/pose',PoseStamped,lambda m:ps.append(m))
+rospy.Subscriber('/map_ros/cloud',PointCloud2,lambda m:cl.append(m))
+rospy.Subscriber('/mavros/setpoint_position/local',PoseStamped,lambda m:sp.append(m))
+po=rospy.Publisher('/aft_mapped_to_init',Odometry,queue_size=10)
+pc2=rospy.Publisher('/cloud_registered',PointCloud2,queue_size=10)
+plp=rospy.Publisher('/mavros/local_position/pose',PoseStamped,queue_size=10)
+pcm=rospy.Publisher('/planning/pos_cmd',PositionCommand,queue_size=10)
+rospy.sleep(2)
+
+# 1) 输入桥: 转发 + frame 改写
+o=Odometry(); o.header.frame_id='camera_init'
+o.pose.pose.position.x=1.0; o.pose.pose.position.y=2.0; o.pose.pose.position.z=3.0
+o.pose.pose.orientation.w=1.0
+c2=PointCloud2(); c2.header.frame_id='camera_init'; c2.height=1; c2.width=2; c2.point_step=16; c2.row_step=32; c2.data=[0]*32
+for _ in range(5): po.publish(o); pc2.publish(c2); rospy.sleep(0.1)
+rospy.sleep(0.5)
+ck(bool(od) and od[-1].header.frame_id=='world', "输入桥 /odom_world frame→world")
+ck(bool(ps) and abs(ps[-1].pose.position.x-1.0)<1e-6, "输入桥 /map_ros/pose 位姿透传")
+ck(bool(cl) and cl[-1].header.frame_id=='world', "输入桥 /map_ros/cloud frame→world")
+
+# 2) seed 悬停（还没发过 pos_cmd，且对齐未完成 —— seed 不依赖对齐）
+s=PoseStamped(); s.header.frame_id='world'
+s.pose.position.x=0.5; s.pose.position.y=0.6; s.pose.position.z=0.0; s.pose.orientation.w=1.0
+sp.clear()
+for _ in range(15): plp.publish(s); rospy.sleep(0.1)
+rospy.sleep(0.5)
+ck(bool(sp) and abs(sp[-1].pose.position.z-1.5)<0.02 and abs(sp[-1].pose.position.x-0.5)<0.02,
+   "seed 悬停 → (0.5, 0.6, 1.5)")
+
+# 3) 发 pos_cmd 但未对齐 → 拒绝转发（防撞）
+c=PositionCommand(); c.position.x=3.0; c.position.z=1.5; c.trajectory_flag=1
+for _ in range(3): pcm.publish(c); rospy.sleep(0.2)   # 先让桥拿到 last_cmd
+rospy.sleep(1.0)                                      # 等它彻底离开 seed 阶段
+sp.clear()                                            # 清掉 seed 阶段的残留
+for _ in range(5): pcm.publish(c); rospy.sleep(0.1)
+ck(len(sp)==0, "未对齐时拒绝转发 FUEL 目标（防撞保险）")
+sys.exit(0 if all(F) else 1)
+PY
+cleanup; pkill -f "rosmaster --core -p 11351" 2>/dev/null
+
+# ---------- 实例2: 朝向对齐 + 旋转转发 ----------
+echo ""
+echo "===== C) 实例2（align_samples=5，测对齐+旋转）====="
+master 11352
+setsid rosrun fuel_bridge fuel_ctrl_bridge.py _auto_offboard:=false _seed_z:=0 _align_samples:=5 >/tmp/sm_c2.log 2>&1 </dev/null &
+sleep 5
+pgrep -f fuel_ctrl_bridge >/dev/null && ok "控制桥在跑" || no "控制桥未起"
+
+python3 - <<'PY' || FAIL=1
+import math, sys, rospy
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
+from quadrotor_msgs.msg import PositionCommand
+rospy.init_node('sm2', anonymous=True, disable_signals=True)
+F=[]
+def ck(c,m): print("  %s %s" % ("PASS" if c else "FAIL", m)); F.append(c)
+yq=lambda y:(0.0,0.0,math.sin(y/2),math.cos(y/2))
+sp=[]; rospy.Subscriber('/mavros/setpoint_position/local',PoseStamped,lambda m:sp.append(m))
+po=rospy.Publisher('/odom_world',Odometry,queue_size=10)
+plp=rospy.Publisher('/mavros/local_position/pose',PoseStamped,queue_size=10)
+pcm=rospy.Publisher('/planning/pos_cmd',PositionCommand,queue_size=10)
+rospy.sleep(2)
+PSI=math.radians(82.24)
+# 喂位姿: FUEL 系 yaw=0, PX4 系 yaw=82.24 → 桥估计 psi=82.24
+for _ in range(15):
+    o=Odometry(); o.pose.pose.orientation.x,o.pose.pose.orientation.y,o.pose.pose.orientation.z,o.pose.pose.orientation.w=yq(0.0)
+    po.publish(o)
+    s=PoseStamped(); s.pose.orientation.x,s.pose.orientation.y,s.pose.orientation.z,s.pose.orientation.w=yq(PSI)
+    plp.publish(s); rospy.sleep(0.1)
+rospy.sleep(1)
+c=PositionCommand(); c.position.x=3.0; c.position.y=0.0; c.position.z=1.5; c.trajectory_flag=1
+sp.clear()
+for _ in range(20): pcm.publish(c); rospy.sleep(0.1)
+rospy.sleep(0.5)
+if not sp:
+    ck(False, "对齐后转发 FUEL 目标")
+else:
+    g=sp[-1]; ex=(3.0*math.cos(PSI),3.0*math.sin(PSI))
+    ck(abs(g.pose.position.x-ex[0])<0.05 and abs(g.pose.position.y-ex[1])<0.05,
+       "目标点按朝向差旋转 → (%.3f, %.3f)（期望 %.3f, %.3f）" % (g.pose.position.x,g.pose.position.y,ex[0],ex[1]))
+    ey=math.degrees(2*math.atan2(g.pose.orientation.z,g.pose.orientation.w))
+    ck(abs(ey-82.24)<1.0, "yaw 同步偏移 → %.2f deg（期望 82.24）" % ey)
+sys.exit(0 if all(F) else 1)
+PY
+cleanup; pkill -f "rosmaster --core -p 11352" 2>/dev/null
+
+echo ""
+echo ""
+echo "===== F) goal_arbiter 单测（FUEL目标→SUPER航点的仲裁限频）====="
+python3 "$D/test/test_goal_arbiter.py" && ok "goal_arbiter 单测" || no "goal_arbiter 单测"
+
+echo ""
+echo "===== G) 联调脚本 + 超级 RViz 配置 ====="
+ALL=$D/scripts/super_explore_all.sh
+STOP=$D/scripts/super_explore_stop.sh
+TWIN=$HOME/ros1_ws/scripts/twin_livo_fast.sh
+RVIZ=$HOME/super_sim_ws/src/task_run_scripts/rviz/sim_top_down.rviz
+
+for f in "$ALL" "$STOP" "$TWIN"; do
+  [ -f "$f" ] || { no "存在 $(basename $f)"; continue; }
+  bash -n "$f" 2>/dev/null && ok "语法 $(basename $f)" || no "语法 $(basename $f)"
+done
+
+grep -q 'world camera_init' "$ALL" && ok "all: 补了 world->camera_init 静态 TF" || no "all: 缺 TF"
+grep -q 'sim_fuel_style.rviz' "$ALL" && ok "all: 默认 RViz 用 FUEL 论文风格" || no "all: 未接 FUEL 风格 rviz"
+RVIZ_FUEL=$HOME/super_sim_ws/src/task_run_scripts/rviz/sim_fuel_style.rviz
+if [ -f "$RVIZ_FUEL" ]; then
+  python3 -c "
+import yaml,sys
+d=yaml.safe_load(open(sys.argv[1])); vm=d['Visualization Manager']; go=vm['Global Options']
+topics=set()
+def w(x):
+    for it in x or []:
+        t=it.get('Topic') or it.get('Marker Topic')
+        if t: topics.add(t)
+        if it.get('Displays') is not None: w(it['Displays'])
+w(vm.get('Displays'))
+need=['/planning_vis/frontier','/planning_vis/trajectory','/planning/position_cmd_vis','/fsm_node/rog_map/occ','/fsm_node/rog_map/inf_occ','/cloud_registered','/mavros/local_position/odom']
+miss=[t for t in need if t not in topics]
+_e=yaml.safe_load(open('/home/liyan/fuel_ws/src/FUEL/fuel_planner/plan_manage/config/exp.rviz'))['Visualization Manager']['Global Options']
+parity = len(_e)==len(go) and all(go.get(k)==v for k,v in _e.items())
+ok = parity and not miss
+print(('  PASS ' if ok else '  FAIL ')+'rviz 与 FUEL exp.rviz 的 Global Options 一致=%s, 关键话题 %d/%d' % (parity, len(need)-len(miss), len(need)))
+sys.exit(0 if ok else 1)
+" "$RVIZ_FUEL" || no "FUEL 风格 rviz 校验失败"
+else
+  no "sim_fuel_style.rviz 不存在"
+fi
+# fast_livo2.rviz: 启用的点云层 Decay Time 必须为 0（0=永久保留）。
+# 设成 >0 时，只要 /clock 冻结或点云断流超过该秒数，画面就被清空 -> "经常性完全不显示"
+FASTLIVO_RVIZ=$HOME/twin_ws/src/FAST-LIVO2/rviz_cfg/fast_livo2.rviz
+if [ -f "$FASTLIVO_RVIZ" ]; then
+  python3 -c "
+import yaml,sys
+d=yaml.safe_load(open(sys.argv[1])); bad=[]
+def w(x):
+    for it in x or []:
+        if it.get('Class')=='rviz/PointCloud2' and it.get('Enabled') and str(it.get('Decay Time'))!='0':
+            bad.append('%s(decay=%s)' % (it.get('Name'), it.get('Decay Time')))
+        if it.get('Displays') is not None: w(it['Displays'])
+w(d['Visualization Manager']['Displays'])
+print(('  PASS ' if not bad else '  FAIL ')+'fast_livo2.rviz 启用点云层 Decay=0(防 /clock 冻结清屏): %s' % (bad if bad else 'OK'))
+sys.exit(0 if not bad else 1)
+" "$FASTLIVO_RVIZ" || no "fast_livo2.rviz 有启用层 Decay Time>0（/clock 冻结会整屏清空）"
+else
+  no "fast_livo2.rviz 不存在"
+fi
+# RViz 在【启动时】读 use_sim_time；此时 bridge.launch 若还没起，RViz 会用墙上时钟 -> TF 查不到 -> 空白
+for pair in "twin:$HOME/ros1_ws/scripts/twin_livo_fast.sh" "all:$HOME/fuel_ws/src/fuel_bridge/scripts/super_explore_all.sh"; do
+  tag=${pair%%:*}; f=${pair#*:}
+  if grep -q 'rosparam set use_sim_time true' "$f"; then ok "$tag: RViz 前设 use_sim_time"; else no "$tag: 缺 use_sim_time（RViz 可能用墙上时钟导致空白）"; fi
+done
+grep -q 'sim_top_down.rviz' "$ALL" && ok "all: 使用 sim_top_down.rviz"        || no "all: 未接 RViz"
+bash "$ALL" --print-params 2>/dev/null | grep -q 'rviz=1' && ok "all: 默认起 RViz"  || no "all: 默认 rviz 非 1"
+bash "$ALL" --print-params --no-rviz 2>/dev/null | grep -q 'rviz=0' && ok "all: --no-rviz 生效" || no "all: --no-rviz 失效"
+# ---- tree_scan（树干全周扫描）已并入 super_explore_all.sh ----
+# 用【绝对路径】而不是 rospack：smoke_test 可能在没 source 全部工作区的环境里跑
+TREE_DIR=${TREE_DIR:-/mnt/c/Users/liyan/Desktop/1225松树林/tree_scan}
+for f in tree_scan.sh tree_scan_manager.py tree_scan_core.py test_core.py; do
+  [ -f "$TREE_DIR/$f" ] && ok "tree_scan: $f 存在" || no "tree_scan: 缺 $f（$TREE_DIR）"
+done
+grep -q -- '--tree-scan)'    "$ALL" && ok "all: 支持 --tree-scan"    || no "all: 缺 --tree-scan"
+grep -q -- '--no-tree-scan)' "$ALL" && ok "all: 支持 --no-tree-scan" || no "all: 缺 --no-tree-scan"
+grep -q 'tree_scan_manager.py' "$ALL" && ok "all: 会启动 tree_scan_manager" || no "all: 未接 tree_scan 启动"
+grep -q '0/7.5 前置一致性检查' "$ALL" && ok "all: 有前置一致性检查段" || no "all: 缺前置一致性检查"
+grep -q 'goal_z_max' "$ALL" && ok "all: 检查 FSM goal_z_max(真正的飞行高度上限，非 virtual_ceil_height)" \
+  || no "all: 未检查 goal_z_max"
+bash "$ALL" --print-params 2>/dev/null | grep -q 'tree=0' && ok "all: 默认 tree=0(不自动绕树)" || no "all: 默认 tree 非 0"
+bash "$ALL" --tree-scan --print-params 2>/dev/null | grep -q 'tree=1' && ok "all: --tree-scan 生效" || no "all: --tree-scan 失效"
+TREE_EXPLORE_TIME=90 bash "$ALL" --tree-scan --print-params 2>/dev/null | grep -q 'et=90' \
+  && ok "all: TREE_EXPLORE_TIME 可覆盖" || no "all: TREE_EXPLORE_TIME 不生效"
+# ★ 前置检查【不能误报】：_val 必须真能从 launch/xml 取到值，否则会把正常配置报成有问题
+FUEL_LA=$HOME/fuel_ws/src/fuel_bridge/launch/fuel_real.launch
+FUEL_AX=$(find $HOME/fuel_ws/src -path '*exploration_manager/launch/algorithm.xml' 2>/dev/null | head -1)
+_val(){ grep -oE "name=\"$2\"[^>]*value=\"[^\"]*\"" "$1" 2>/dev/null | head -1 | grep -oE '"[^"]*"$' | tr -d '"' | tr -d ' '; }
+if [ -f "$FUEL_LA" ]; then
+  _v=$(_val "$FUEL_LA" box_max_z)
+  [ -n "$_v" ] && ok "前置检查取值正常 (box_max_z=$_v)" || no "前置检查取值失败(_val 正则)，会误报未打补丁"
+fi
+if [ -n "$FUEL_AX" ] && [ -f "$FUEL_AX" ]; then
+  _v=$(grep -oE 'name="sdf_map/resolution"[^>]*value="[^"]*"' "$FUEL_AX" 2>/dev/null | head -1 | grep -oE '"[^"]*"$' | tr -d '"' | tr -d ' ')
+  [ -n "$_v" ] && ok "前置检查取值正常 (sdf_map/resolution=$_v)" || no "前置检查取值失败(algorithm.xml)"
+fi
+# 手工编辑过的仿真配置：至少保证 YAML 没被改坏，并打印当前动力学上限
+SIM_CFG=$HOME/super_sim_ws/src/task_run_scripts/config/sim_real_flight.yaml
+if [ -f "$SIM_CFG" ]; then
+  python3 -c "
+import yaml,sys
+d=yaml.safe_load(open(sys.argv[1])); b=d['traj_opt']['boundary']
+def find(x,k):
+    if isinstance(x,dict):
+        for kk,vv in x.items():
+            if kk==k: return vv
+            r=find(vv,k)
+            if r is not None: return r
+    return None
+gzmin=find(d,'goal_z_min'); gzmax=find(d,'goal_z_max')
+bad=[]
+if gzmin is None or float(gzmin)>0.6: bad.append('goal_z_min=%s(应<=0.6)'%gzmin)
+if gzmax is None or float(gzmax)<5.0: bad.append('goal_z_max=%s(应>=5.0, 否则FUEL/绕树目标被吸附到低空)'%gzmax)
+print(('  PASS ' if not bad else '  FAIL ')+'sim_real_flight.yaml 可解析 (max_vel=%s max_acc=%s robot_r=%s 分界线=%s goal_z=%s~%s)%s' % (b['max_vel'], b['max_acc'], find(d,'robot_r'), find(d,'frontier_extraction_en'), gzmin, gzmax, ('  << '+', '.join(bad)) if bad else ''))
+sys.exit(0 if not bad else 1)
+" "$SIM_CFG" || no "sim_real_flight.yaml 解析失败或 goal_z 区间不对（手工改动改坏了？）"
+else
+  no "sim_real_flight.yaml 不存在"
+fi
+grep -q '目标高度夹取' "$ALL" && ok "all: 仲裁器 z 夹取已参数化（防 SUPER Ill corridor）" || no "all: 缺 z 夹取"
+# ★ 一致性：仲裁器在 FSM 上游，它的 z 上限默认值必须 == sim_real_flight.yaml 的 fsm.goal_z_max，
+#   否则"限高 6m"只改一处会白改（上游先把目标夹低）
+_az=$(grep -oE '_z_max:=\$\{ARB_Z_MAX:-[0-9.]+' "$ALL" | head -1 | grep -oE '[0-9.]+$')
+_gz=$(grep -E '^[[:space:]]*goal_z_max:' "$SIM_CFG" 2>/dev/null | head -1 | awk '{print $2}')
+if [ -n "$_az" ] && [ -n "$_gz" ] && [ "$_az" = "$_gz" ]; then
+  ok "all: 仲裁器 z 上限($_az) 与 fsm.goal_z_max($_gz) 一致"
+else
+  no "all: 仲裁器 z 上限(${_az:-?}) != fsm.goal_z_max(${_gz:-?}) —— 限高只改一处会白改"
+fi
+grep -q '_stuck_timeout' "$ALL" && ok "all: 仲裁器卡死收缩已参数化" || no "all: 缺卡死收缩"
+grep -q 'super_to_px4_bridge/failsafe_en false' "$ALL" && ok "all: bridge 关 failsafe（仿真无遥控器,防 Position hold）" || no "all: 缺 failsafe_en=false"
+grep -q 'RC signal lost' "$ALL" && ok "all: 注释记录了 RC 丢失症状" || no "all: 缺症状说明"
+grep -q 'super_to_px4_bridge/auto_arm true' "$ALL"    && ok "all: bridge 开 auto_arm（仿真无遥控器）" || no "all: 缺 auto_arm"
+grep -q 'rosparam load \"$BRIDGE_YAML\" /super_to_px4_bridge' "$ALL" && ok "all: bridge 开 auto_offboard"              || no "all: 缺 auto_offboard"
+grep -q '等飞机起飞并悬停稳定' "$ALL"  && ok "all: 触发前先等悬停稳定（先悬停再跑算法）" || no "all: 缺悬停等待"
+grep -q "grep -vE '^---'" "$ALL"      && ok "all: z 解析滤掉 rostopic echo 的 --- 分隔符" || no "all: z 解析仍用 tail -1（会取到 ---）"
+grep -q 'FUEL 必须用【干净环境】启动' "$ALL" && ok "all: FUEL 用干净环境启动（防工作区混用）" || no "all: FUEL 环境未隔离"
+grep -qE '^    source ~/fuel_ws/devel/setup.bash$' "$ALL" && ok "all: FUEL 启动包在子 shell 里" || no "all: FUEL 启动不在子 shell"
+grep -q 'FUEL 冷启动有时' "$ALL"           && ok "all: FUEL 失败时打印日志/提示"              || no "all: FUEL 失败无诊断"
+grep -q 'stable -ge 3' "$ALL"         && ok "all: 悬停判据自适应（连续3s高度波动<2cm）"   || no "all: 悬停判据缺失"
+grep -q 'MAVLink 流率' "$TWIN" && ok "twin: 启动即调 MAVLink 流率（防 odom 只有 1Hz）" || no "twin: 缺流率调整"
+grep -q 'LOCAL_POSITION_NED:50' "$TWIN" && ok "twin: LOCAL_POSITION_NED=50" || no "twin: NED 流率未设"
+grep -q 'ss -tuln' "$TWIN"  && ok "twin: port_open 用 UDP 口径（14610 是 UDP）" || no "twin: 端口判据缺 UDP"
+grep -q 'stamped=' "$STOP"  && ok "stop: PCD 按时间戳归档"                     || no "stop: 缺 PCD 归档"
+
+if [ -f "$RVIZ" ]; then
+  python3 - "$RVIZ" <<'PYEOF'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+vm = d['Visualization Manager']; go = vm['Global Options']
+want = {'GlobalCloud': ('/cloud_registered', 1),
+        'Occ': ('/fsm_node/rog_map/occ', 2),
+        'Unknown': ('/fsm_node/rog_map/unk', 2),
+        'InflatedCloud': ('/fsm_node/rog_map/inf_occ', 2)}
+got = {}
+def walk(ds):
+    for it in ds or []:
+        if it.get('Class') == 'rviz/PointCloud2' and it.get('Enabled'):
+            got[it.get('Name')] = (it.get('Topic'), it.get('Decay Time'))
+        if it.get('Displays') is not None: walk(it['Displays'])
+walk(vm.get('Displays'))
+bad = [k for k, v in want.items() if got.get(k) != v]
+ok = (go.get('Fixed Frame') == 'world' and not bad)
+print(("  PASS " if ok else "  FAIL ") + "rviz 配置(sim_top_down): FixedFrame=%s 点云=%d/%d 符合" % (
+    go.get('Fixed Frame'), len(want) - len(bad), len(want)))
+sys.exit(0 if ok else 1)
+PYEOF
+  [ $? -eq 0 ] || FAIL=1
+else
+  no "rviz 配置存在（$RVIZ）"
+fi
+
+[ $FAIL -eq 0 ] && echo "SMOKE TEST: ALL PASS" || echo "SMOKE TEST: FAILED"
+exit $FAIL

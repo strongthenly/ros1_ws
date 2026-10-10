@@ -1,0 +1,30 @@
+<launch>
+  <arg name="use_waypoint" default="true"/>
+  <arg name="config_name" default="real_flight.yaml"/>
+  <arg name="waypoint_data" default="real_mission.txt"/>
+
+  <!-- FSM 节点 -->
+  <node pkg="super_planner" name="fsm_node" type="fsm_node" output="screen">
+    <param name="config_name" value="$(arg config_name)" type="string"/>
+  </node>
+
+  <!-- PX4 Bridge 节点 -->
+  <node pkg="super_planner" type="super_to_px4_bridge" name="super_to_px4_bridge" output="screen">
+    <rosparam command="load" file="$(find super_planner)/config/super_to_px4_bridge.yaml"/>
+  </node>
+
+  <!-- 航点任务节点 (可选) -->
+  <node pkg="mission_planner" type="waypoint_mission" name="waypoint_mission" output="screen"
+        if="$(arg use_waypoint)">
+    <param name="config_name" value="waypoint.yaml" type="string"/>
+    <param name="data_name" value="$(arg waypoint_data)" type="string"/>
+  </node>
+
+  <!-- 静态 TF: map -> world -->
+  <node pkg="tf" type="static_transform_publisher" name="map_to_world"
+        args="0 0 0 0 0 0 /map /world 1000"/>
+
+  <!-- RViz (实机模式) -->
+  <node pkg="rviz" type="rviz" name="rviz"
+        args="-d $(find super_planner)/rviz/real_svc.rviz" output="log"/>
+</launch>

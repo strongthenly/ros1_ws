@@ -1,0 +1,15 @@
+<launch>
+  <!-- 避障测试 RViz：drone:=odin 或 drone:=mid360
+       odin  -> obstacle_test.rviz      (/odin1/cloud_raw, Fixed Frame=odom)
+       mid360-> obstacle_test_mid360.rviz (/cloud_registered, Fixed Frame=camera_init) -->
+  <arg name="drone" default="mid360"/>
+
+  <group if="$(eval arg('drone') == 'odin')">
+    <node pkg="rviz" type="rviz" name="rviz_obstacle_test"
+          args="-d $(find task_run_scripts)/rviz/obstacle_test.rviz" output="screen"/>
+  </group>
+  <group if="$(eval arg('drone') == 'mid360')">
+    <node pkg="rviz" type="rviz" name="rviz_obstacle_test"
+          args="-d $(find task_run_scripts)/rviz/obstacle_test_mid360.rviz" output="screen"/>
+  </group>
+</launch>

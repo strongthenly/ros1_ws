@@ -1,0 +1,175 @@
+#!/bin/bash
+# ============================================================
+#  启动脚本（合并版）  v4
+#   默认:      只补"缺失"的组件（常驻时 0-2 秒）
+#   --full:    清残留 + 启动后等链路就绪（4560 → /clock 步进 → /twin → /cloud_registered）
+#              并对 FAST-LIVO2 做"无输出自动重启"（解决点云时有时无）
+#   PCD_SAVE:  环境变量，1=退出时保存 PCD，0=不保存（默认 0）
+#
+#  用法:
+#    bash ~/twin_livo_fast.sh              # 快速补缺
+#    bash ~/twin_livo_fast.sh --full       # 全量 + 验证链路
+#    PCD_SAVE=1 bash ~/twin_livo_fast.sh --full   # 同时开启 PCD 保存
+# ============================================================
+START=$(date +%s)
+FULL=0
+[ "$1" = "--full" ] && FULL=1
+PCD_SAVE=${PCD_SAVE:-0}
+
+export ROS_MASTER_URI=http://127.0.0.1:11311
+export ROS_IP=127.0.0.1
+source /opt/ros/noetic/setup.bash
+source ~/twin_ws/devel/setup.bash
+ROOT=~/twin_ws/src/FAST-LIVO2
+started=""
+el(){ echo $(( $(date +%s) - START )); }
+
+if [ $FULL -eq 1 ]; then
+  echo "  [full] 清理残留 roslaunch（防 run_id 冲突）..."
+  pkill -f roslaunch 2>/dev/null
+  sleep 2
+fi
+
+# 1) ROS master（绕开慢的 roscore：它 140s，rosmaster+rosout 只要 ~4s）
+if ! timeout 2 rosnode list >/dev/null 2>&1; then
+  echo "  [1/5] 启动 ROS master（rosmaster+rosout，约 4 秒）..."
+  setsid rosmaster --core -p 11311 > /tmp/rosmaster.log 2>&1 < /dev/null &
+  for i in $(seq 1 30); do
+    timeout 2 rosnode list >/dev/null 2>&1 && break
+    sleep 1
+  done
+  rosparam set /rosdistro noetic 2>/dev/null
+  rosparam set /rosversion 1.17.4 2>/dev/null
+  setsid rosrun rosout rosout __name:=rosout > /tmp/rosout.log 2>&1 < /dev/null &
+  sleep 2
+  started="$started master($(el)s)"
+else
+  echo "  [1/5] master 已在跑 ✓"
+fi
+
+# 2) PX4（LockStep 的关键：PX4 不在 → AirSim 不步进 → /clock 冻结 → 全部无数据）
+if ! pgrep -f "bin/px4" >/dev/null 2>&1; then
+  echo "  [2/5] 启动 PX4 ..."
+  tmux kill-session -t px4 2>/dev/null
+  tmux new-session -d -s px4
+  # PX4 若退出，保留会话不消失 —— 便于事后 capture-pane 回看退出原因
+  tmux set-option -t px4 remain-on-exit on 2>/dev/null
+  tmux send-keys -t px4 "cd ~/PX4-AirSim && make px4_sitl_default none_iris 2>&1 | tee /tmp/px4_run.log" Enter
+  started="$started PX4"
+else
+  echo "  [2/5] PX4 已在跑 ✓"
+fi
+
+# 3) 桥
+if ! pgrep -f "bridge.py" >/dev/null 2>&1; then
+  echo "  [3/5] 启动仿真桥 ..."
+  setsid roslaunch twin_bridge bridge.launch host:=127.0.0.1 imu_rate:=220 rgb_rate:=30 depth_rate:=5 \
+      > /tmp/bridge.log 2>&1 < /dev/null &
+  started="$started 桥"
+else
+  echo "  [3/5] 桥已在跑 ✓"
+fi
+
+# 4) FAST-LIVO2（含 PCD 开关）
+if ! pgrep -f "fastlivo_mapping" >/dev/null 2>&1; then
+  echo "  [4/5] 启动 FAST-LIVO2（PCD保存=$PCD_SAVE）..."
+  rosparam load $ROOT/config/TwinSim.yaml
+  rosparam load $ROOT/config/TwinSim_camera.yaml /laserMapping
+  if [ "$PCD_SAVE" = "1" ]; then
+    mkdir -p $ROOT/Log/pcd
+    rosparam set /pcd_save/pcd_save_en true
+    rosparam set /pcd_save/interval -1
+    echo "         PCD 开启 → 退出(SIGINT)时存到 $ROOT/Log/pcd/"
+  else
+    rosparam set /pcd_save/pcd_save_en false
+  fi
+  setsid rosrun fast_livo fastlivo_mapping __name:=laserMapping > /tmp/fastlivo.log 2>&1 < /dev/null &
+  started="$started FAST-LIVO2"
+else
+  echo "  [4/5] FAST-LIVO2 已在跑 ✓"
+  if [ "$PCD_SAVE" = "1" ]; then
+    cur=$(rosparam get /pcd_save/pcd_save_en 2>/dev/null)
+    [ "$cur" != "true" ] && echo "         [!] 要求存 PCD 但 FAST-LIVO2 已在运行（参数启动时读取）→ 先 bash ~/fuel_stop.sh 再重跑才会生效"
+  fi
+fi
+
+# 5) RViz
+if ! pgrep -x rviz >/dev/null 2>&1; then
+  echo "  [5/5] 启动 RViz ..."
+  setsid rviz -d $ROOT/rviz_cfg/fast_livo2.rviz > /tmp/rviz.log 2>&1 < /dev/null &
+  started="$started RViz"
+else
+  echo "  [5/5] RViz 已在跑 ✓"
+fi
+
+# ============ --full: 等链路就绪 + 自动修复 ============
+if [ $FULL -eq 1 ]; then
+  echo ""
+  echo "  [full] 等 PX4 <-> AirSim TCP 4560（最多 120s）..."
+  ok4560=0
+  for i in $(seq 1 40); do
+    if ss -tn 2>/dev/null | grep -q ':4560'; then ok4560=1; echo "         OK 4560 已连接（$(el)s）"; break; fi
+    [ $((i % 5)) -eq 0 ] && echo "         ... 等 4560（已 $(el)s）"
+    sleep 3
+  done
+  [ $ok4560 -eq 0 ] && echo "         [X] 4560 未连 —— PX4 没起来或 AirSim 没 Play"
+
+  # 关键：/clock 是否在步进（LockStep 的真相指标）
+  echo "  [full] 等 /clock 步进（仿真时间在走）..."
+  okclk=0
+  for i in $(seq 1 20); do
+    if timeout 5 rostopic hz /clock 2>/dev/null | grep -q "average"; then okclk=1; echo "         OK /clock 在走（$(el)s）"; break; fi
+    [ $((i % 5)) -eq 0 ] && echo "         ... /clock 未动（已 $(el)s）—— 多半 PX4 未连 AirSim"
+    sleep 3
+  done
+  if [ $okclk -eq 0 ]; then
+    echo "         [X] /clock 不走 → 仿真冻结，后面所有数据都不会有"
+    echo "         --- tmux px4 画面（PX4 若已退出，原因就在这）---"
+    tmux capture-pane -p -t px4 2>/dev/null | tail -12 | sed 's/^/           /'
+    echo "         --- /tmp/px4_run.log 尾部 ---"
+    tail -8 /tmp/px4_run.log 2>/dev/null | sed 's/^/           /'
+    echo "         [FATAL] 链路未就绪，--full 中止"
+    exit 1
+  fi
+
+  # MAVROS 依赖 PX4 的专用 MAVLink 端口；没监听则后面必然 No odom
+  echo "  [full] 等 PX4 专用 MAVLink 14610 监听..."
+  ok14610=0
+  for i in $(seq 1 10); do
+    if ss -tln 2>/dev/null | grep -q ":14610"; then ok14610=1; echo "         OK 14610 在监听（$(el)s）"; break; fi
+    sleep 1
+  done
+  if [ $ok14610 -eq 0 ]; then
+    echo "         [X] 14610 未监听 → MAVROS 无法连 FCU → 必然 'No odom'"
+    echo "         在 PX4 的 tmux 里手动执行: mavlink start -u 14610 -o 14611 -t 127.0.0.1"
+    echo "         [FATAL] 链路未就绪，--full 中止"
+    exit 1
+  fi
+
+  echo "  [full] 等 /twin 出数据（最多 60s）..."
+  for i in $(seq 1 20); do
+    if timeout 4 rostopic echo -n 1 /twin/lidar/points_preview/header >/dev/null 2>&1; then echo "         OK /twin 有数据（$(el)s）"; break; fi
+    [ $((i % 5)) -eq 0 ] && echo "         ... 等数据（已 $(el)s）"
+    sleep 3
+  done
+
+  # FAST-LIVO2 无输出 → 自动重启（解决"点云时有时无"）
+  echo "  [full] 等 FAST-LIVO2 出 /cloud_registered（无则自动重启，最多 3 次）..."
+  okcl=0
+  for attempt in 1 2 3; do
+    for i in $(seq 1 15); do
+      if timeout 6 rostopic hz /cloud_registered 2>/dev/null | grep -q "average"; then okcl=1; break; fi
+      sleep 2
+    done
+    [ $okcl -eq 1 ] && { echo "         OK /cloud_registered 有数据（$(el)s, 第${attempt}次尝试）"; break; }
+    echo "         [!] 第${attempt}次无输出 → 重启 FAST-LIVO2 ..."
+    pkill -f fastlivo_mapping 2>/dev/null; sleep 2
+    setsid rosrun fast_livo fastlivo_mapping __name:=laserMapping > /tmp/fastlivo.log 2>&1 < /dev/null &
+    sleep 5
+  done
+  [ $okcl -eq 0 ] && echo "         [X] FAST-LIVO2 始终无输出 —— 查 /tmp/fastlivo.log（常见：PX4 未连→无数据）"
+fi
+
+echo ""
+echo "本次启动: ${started:-（无需启动, 全部已在跑）}"
+echo "耗时: $(el) 秒"

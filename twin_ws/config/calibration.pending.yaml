@@ -1,0 +1,13 @@
+status: pending_real_calibration
+algorithm_imu_source: null
+lidar_model: MID360_user_reported
+camera_model: D435
+lidar_imu_transform: null
+lidar_camera_transform: null
+body_lidar_transform: null
+camera_intrinsics: null
+camera_distortion: null
+sensor_time_offsets: null
+imu_noise: null
+vehicle_mass_inertia_thrust: null
+lidar_per_point_timing_verified: false

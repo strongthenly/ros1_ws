@@ -1,0 +1,9 @@
+<launch>
+  <arg name="calibration" default="$(env HOME)/twin_ws/config/calibration.pending.yaml" />
+  <arg name="imu_source" default="airsim_body_imu" />
+  <node pkg="twin_bridge" type="validated_inputs.py" name="validated_inputs" output="screen" required="true">
+    <param name="calibration" value="$(arg calibration)" />
+    <param name="expected_imu_source" value="$(arg imu_source)" />
+  </node>
+  <node pkg="twin_bridge" type="livox_adapter.py" name="livox_adapter" output="screen" required="true" />
+</launch>

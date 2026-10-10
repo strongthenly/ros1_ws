@@ -1,0 +1,11 @@
+<launch>
+    <node pkg="task_run_scripts" type="realman_monitor_node" name="realman_monitor" 
+          output="screen" 
+          launch-prefix="bash -c 'sleep 0.1; $0 $@'">
+        
+        <rosparam command="load" file="$(find task_run_scripts)/config/realman.yaml" />
+        
+        <param name="displacement_threshold" value="2.5" />
+        <param name="time_window" value="0.5" />
+    </node>
+</launch>

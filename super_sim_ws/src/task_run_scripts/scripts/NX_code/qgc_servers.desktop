@@ -1,0 +1,15 @@
+[Desktop Entry]
+
+Type=Application
+
+Exec=/home/fouruav/odin_ws/src/task_run_scripts/scripts/toQGC/start_qgc_servers.sh
+
+Hidden=false
+
+NoDisplay=false
+
+X-GNOME-Autostart-enabled=true
+
+Name=QGC_Remote_Servers
+
+Comment=Start QGC Stream, Touch, and Command Servers

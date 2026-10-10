@@ -1,0 +1,201 @@
+# ============================================================
+# real_flight.yaml - 实际飞行配置文件
+# 包含：有限状态机(FSM)、SUPER路径规划器、轨迹优化、
+#       A*搜索、ROG地图等模块的参数配置
+# ============================================================
+
+# ======================== 有限状态机 (FSM) ========================
+# 控制整体任务流程：目标接收、重规划触发、指令发布
+fsm:
+  click_goal_en: true                    # 是否启用RViz点击目标点功能
+  click_goal_topic: "/move_base_simple/goal"  # 点击目标点的ROS话题（与RViz默认一致）
+  click_height: 1.0                      # 点击目标固定高度(m)，> -5 时点击目标统一使用此高度
+  click_yaw_en: true                     # 点击目标点时是否启用偏航角控制
+  waypoint_goal_en: true                 # 是否启用航点任务目标订阅
+  waypoint_goal_topic: "/waypoint_goal"  # 航点任务目标话题（waypoint_mission 发布，不覆盖高度）
+  replan_rate: 10.0                      # 重规划频率(Hz)
+  cmd_topic: "/planning/pos_cmd"         # 发布给bridge的位置指令话题
+  mpc_cmd_topic: "/planning_cmd/poly_traj"  # MPC多项式轨迹指令话题
+  timer_en: true                         # 是否启用定时重规划（否则仅事件触发）
+  # ===== 路径A: 目标吸附高度限制 =====
+  goal_z_min: 0.6       # 吸附后目标 z 下限(m)(地面测试临时改)
+  goal_z_max: 1.3       # 吸附后目标 z 上限(m)(地面测试临时改)
+
+# ======================== SUPER路径规划器 ========================
+# 核心规划器参数，控制前端搜索、安全走廊、重规划策略等
+super_planner:
+  backup_traj_en: true        # 是否启用备份轨迹（主轨迹失败时的安全回退）
+  detailed_log_en: false      # 是否输出详细日志（调试用）
+  visualization_en: true      # 是否发布可视化标记（RViz显示）
+  use_fov_cut: false          # 是否按传感器视场角裁剪地图（限制感知范围）
+  print_log: false            # 是否打印规划日志到终端
+  visual_process: false       # 是否可视化规划中间过程（调试用）
+  frontend_in_known_free: true   # 前端搜索仅在已知自由空间(未知=障碍: 防A*走未扫描区撞墙)
+  goal_yaw_en: true           # 是否启用目标偏航角
+  goal_vel_en: true           # 是否启用目标速度（到达目标点时的速度）
+  corridor_bound_dis: 0.6     # 安全走廊边界距离(m) (0.39→0.6: 走廊加宽, MINCO轨迹离障碍远防撞)
+  corridor_line_max_length: 1.2   # 安全走廊线段最大长度(m) (方案C: 循迹走guide_path直发, 走廊只做避障检测)
+  safe_corridor_line_max_length: 5.0  # 安全走廊线段最大长度-安全模式(m)，紧急情况下放宽
+  iris_iter_num: 2            # IRIS算法迭代次数（用于生成凸安全区域）
+  obs_skip_num: 2             # 障碍物跳过数量（前端搜索时跳过的障碍物采样数）
+  replan_forward_dt: 0.1      # 重规划前向时间偏移(s)，避免重规划过于频繁
+  planning_horizon: 5.0       # 规划视野距离(m)，超出此距离不规划
+  sensing_horizon: -1         # 感知视野距离(m)，-1表示无限制
+  receding_dis: 3.0           # 后退距离(m)，目标点太远时的滚动规划距离
+  robot_r: 0.35               # 机器人半径(m) (0.25→0.35: 桨0.23+余量0.12, CIRI走廊离障碍≥0.35m)
+  yaw_dot_max: 2.5            # 最大偏航角速率(rad/s)
+  # Yaw mode: 1=朝向速度方向, 2=朝向目标点
+  yaw_mode: 2                 # 偏航控制模式
+  mpc_horizon: 15             # MPC预测时域步数
+
+# ======================== 轨迹优化 ========================
+# 包含探索轨迹(exp_traj)和备份轨迹(backup_traj)的优化参数
+traj_opt:
+  # ---- 优化器开关 ----
+  switch:
+    save_log_en: false              # 是否保存优化日志到文件
+    print_optimizer_log: false      # 是否打印优化器内部日志
+
+  # ---- 物理约束边界 ----
+  boundary:
+    max_vel: 1.0    # [SIM] 最大速度: 实机保守 0.3 -> 仿真 1.0 (与 FUEL max_vel 0.8 同量级, 便于对比)           # 最大速度(m/s)
+    max_acc: 1.0    # [SIM] 最大加速度: 实机 0.4 -> 仿真 1.0           # 最大加速度(m/s²)
+    max_jerk: 50.0          # 最大加加速度(m/s³)
+    max_omg: 2.5            # 最大角速度(rad/s)
+    max_acc_thr: 20         # 最大推力加速度(m/s²)，对应满油门
+    min_acc_thr: 0.5        # 最小推力加速度(m/s²)，对应怠速油门
+    penna_margin: 0.1       # 约束惩罚边距，软约束到硬约束的过渡区
+
+  # ---- 探索轨迹优化参数 ----
+  # 用于主轨迹的非线性优化
+  exp_traj:
+    pos_constraint_type: 1       # 位置约束类型（1=软约束, 2=硬约束）
+    energy_cost_type: 4          # 能量代价函数类型（4=加加速度+推力）
+    block_energy_cost: false     # 是否屏蔽能量代价（false=启用）
+    opt_accuracy: 5.0e-6         # 优化收敛精度
+    scale_factor: 1.0            # 缩放因子（用于数值稳定性）
+    integral_reso: 15            # 积分分辨率（每段多项式的积分采样点数）
+    smooth_eps: 0.01             # 平滑因子（避免代价函数中的尖锐点）
+    penna_t: 12000.0             # 时间代价惩罚系数（鼓励轨迹更快完成）
+    penna_pos: 1.0e+7            # 位置约束惩罚系数（碰撞避免）(5e6→1e7: MINCO更严格守走廊不穿障碍)
+    penna_vel: 5.0e+5            # 速度约束惩罚系数
+    penna_acc: 5.0e+5            # 加速度约束惩罚系数
+    penna_jerk: -5.0e+5          # 加加速度代价系数（负值=最小化jerk）
+    penna_attract: 1.0e+3        # 目标吸引力惩罚系数（鼓励趋向目标）
+    penna_omg:  5.0e+5           # 角速度约束惩罚系数
+    penna_thr: 1.0e+5            # 推力约束惩罚系数
+
+  # ---- 备份轨迹优化参数 ----
+  # 主轨迹失败时的安全回退轨迹，优化要求更严格
+  backup_traj:
+    uniform_time_en: true        # 是否使用均匀时间分配（简化优化）
+    pos_constraint_type: 1       # 位置约束类型
+    piece_num: 2                 # 多项式段数（段数越少优化越快）
+    energy_cost_type: 4          # 能量代价函数类型
+    block_energy_cost: true      # 屏蔽能量代价（备份轨迹优先满足约束）
+    opt_accuracy: 1.0e-6         # 优化收敛精度（比主轨迹更严格）
+    scale_factor: 1.0            # 缩放因子
+    integral_reso: 12            # 积分分辨率
+    smooth_eps: 0.01             # 平滑因子
+    penna_t: 1200.0              # 时间代价惩罚系数
+    penna_ts: 1.0e+5             # 段间时间分配惩罚系数
+    penna_pos: 1.0e+6            # 位置约束惩罚系数
+    penna_vel: 1.0e+5            # 速度约束惩罚系数
+    penna_acc: 1.0e+5            # 加速度约束惩罚系数
+    penna_jerk: -1.0e+5          # 加加速度代价系数
+    penna_omg: 1.0e+5            # 角速度约束惩罚系数
+    penna_thr: 1.0e+5            # 推力约束惩罚系数
+
+  # ---- 微分平坦参数 ----
+  # 四旋翼的物理参数，用于将状态/输入映射到平坦输出空间
+  flatness:
+    mass: 1.958               # 飞行器质量(kg)
+    dh: 0.35                 # 水平力臂长度(m)，机臂到质心距离
+    dv: 0.35                 # 垂直力臂长度(m)，电机安装高度偏移
+    cp: 0.001                # 推力系数（推力矩与推力的比值）
+    v_eps: 0.0001            # 速度正则化小量（避免除零）
+    grav: 9.81               # 重力加速度(m/s²)
+
+# ======================== A*搜索 ========================
+# 前端路径搜索模块，用于快速找到无碰撞的粗略路径
+astar:
+  map_voxel_num: [ 500, 500, 100 ]  # 搜索空间的体素网格数量 [x, y, z]
+  visual_process: false      # 是否可视化搜索过程
+  allow_diag: true           # 是否允许对角线移动（8连通 vs 4连通）
+  heu_type: 2                # 启发函数类型（1=曼哈顿, 2=欧几里得, 3=对角线）
+  debug_visualization_en: false  # 是否启用调试可视化
+
+# ======================== ROG地图 ========================
+# 概率占据栅格地图，用于障碍物感知和碰撞检测
+rog_map:
+  resolution: 0.15           # 地图栅格分辨率(m)，越小精度越高但越耗内存
+  inflation_resolution: 0.2  # 膨胀层分辨率(m)，用于安全距离检查
+  inflation_step: 2          # 障碍物膨胀步数（膨胀半径=0.4m）(3→2: 0.6m膨胀室内小空间堵死绕行, 恢复绕行能力)
+  unk_inflation_en: false    # 是否对未知区域进行膨胀处理
+  unk_inflation_step: 1      # 未知区域膨胀步数
+  map_size: [ 30, 30, 6 ]   # 地图尺寸(m) [x, y, z]
+  fix_map_origin: [ 0, 0, 0 ]   # [SIM] 地图原点: 实机[0,0,1.5]是雷达安装高度; 仿真 /cloud_registered 原点即起飞点 -> [0,0,0] (待实测核对)  # 地图原点固定坐标(m)，用于地图滑动时的参考点
+  frontier_extraction_en: false   # 是否提取前沿边界（用于探索任务）
+
+  # 虚拟天花板和地面，限制规划高度范围
+  virtual_ceil_height: 3     # 虚拟天花板高度(m)
+  virtual_ground_height: -3.0  # 虚拟地面高度(m) (改-3.0: 原-0.9量化成+0.15→地面z=0触发below ground; -3.0量化-1.95地面正常)
+
+  load_pcd_en: false         # 是否从PCD文件加载地图（调试/回放用）
+
+  # 地图滑动：当地图中心远离机器人时自动滑动地图
+  map_sliding:
+    enable: true             # 是否启用地图滑动
+    threshold: 0.3           # 滑动触发阈值(m)，机器人偏离地图中心超过此值时滑动
+
+  # ESDF地图（欧几里得有符号距离场），用于梯度信息
+  esdf:
+    enable: false            # 是否启用ESDF（计算开销大，通常关闭）
+    resolution: 0.1          # ESDF分辨率(m)
+    local_update_box: [ 5, 5, 3 ]  # 局部更新范围(m) [x, y, z]
+
+  # ROS回调配置：接收传感器数据
+  ros_callback:
+    enable: true             # 是否启用ROS回调
+    cloud_topic: "/cloud_registered"   # [SIM] 点云话题: 实机 odin /odin1/cloud_slam -> 仿真 FAST-LIVO2 /cloud_registered(与 FUEL 共用)      # 点云话题（Odin SLAM 配准点云）
+    odom_topic: "/mavros/local_position/odom"  # 里程计话题（来自飞控）
+    odom_timeout: 2.0        # 里程计超时时间(s)，超时后停止更新
+
+  # 地图可视化配置
+  visualization:
+    enable: true             # 是否启用地图可视化
+    use_dynamic_reconfigure: false  # 是否使用动态重配置（运行时调参）
+    time_rate: 2             # 按时间间隔发布可视化(s)
+    frame_rate: 0            # 按帧率发布可视化（0=禁用，优先于time_rate）
+    range: [ 15, 15, 4 ]     # 可视化范围(m) [x, y, z]
+    frame_id: "world"        # 可视化坐标系ID
+    pub_unknown_map_en: true   # 是否发布未知区域地图(诊断: 显示激光未扫到的"雾")
+
+  # 点云预处理参数
+  intensity_thresh: -10      # 点云强度阈值，低于此值的点被过滤（去除弱反射点）
+  point_filt_num: 1          # 点云滤波采样数（每隔N个点取1个）
+
+  # 光线投射（Raycasting）参数
+  # 用于概率占据地图的贝叶斯更新
+  raycasting:
+    enable: true            # 是否启用光线投射（与ESDF二选一）
+    batch_update_size: 1     # 批量更新大小（一次处理的光线数）
+    local_update_box: [ 100, 100, 5 ]  # 局部更新范围(体素数)
+    ray_range: [ 0.5, 100 ]  # 光线有效范围(m) [最小, 最大]
+    p_min: 0.12              # 占据概率最小值（截断下界）
+    p_miss: 0.49             # 未命中更新概率（光线穿过自由空间）(必须<p_free 0.4999, 否则清除失效→全屏障碍)
+    omni_en: true            # 全向探测光线: 自动清除残留障碍(不用飞机扫, 遇真实障碍停止)
+    omni_range: 8.0          # 全向光线长度(m)
+    omni_step_h: 5.0         # 水平步长(度) (5: 光线密度×2, 8m处间距1.4m→0.7m, 清细障碍残留)
+    omni_step_v: 7.5        # 垂直步长(度) (7.5: 垂直密度×1.3)
+    omni_fov_v: 60.0         # 垂直视场(±度)
+    p_free: 0.4999            # 自由空间概率阈值（低于此值认为是自由空间）
+    p_occ: 0.85              # 占据概率阈值（高于此值认为是障碍物）
+    p_hit: 0.9               # 命中更新概率（光线击中障碍物）
+    p_max: 0.98              # 占据概率最大值（截断上界）
+    unk_thresh: 1.0          # 未知区域阈值（概率在p_free和p_occ之间为未知）
+
+
+global_path:
+  roll_dist: 5.0
+  downsample: 0.1

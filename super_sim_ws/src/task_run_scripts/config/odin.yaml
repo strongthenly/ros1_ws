@@ -1,0 +1,14 @@
+# 机型 A: Odin 前向 120°x90° dToF 雷达
+cloud_topic: /odin1/cloud_raw
+target_frame: imu          # Odin 机体系(0°=机头); 以实际 TF 为准
+num_bins: 36
+h_fov_deg: 120.0           # 前向 120°
+height_band: 0.3        # 高度带宽
+z_min: 0.0             # 最小高度
+range_min: 0.2
+range_max: 20.0
+accumulation_window: 0.2   # Odin 10Hz, 时间窗累积补偿帧间空洞
+publish_rate: 20.0
+max_cloud_age: 0.5
+angle_sign: -1.0           # PX4 约定: 俯视顺时针为正; 若左右镜像改为 1.0
+debug_markers: true

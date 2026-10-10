@@ -1,0 +1,17 @@
+<launch>
+    <include file="$(find odin_ros_driver)/launch_ROS1/odin1_ros1.launch" />
+
+    <include file="$(find odin_ros_driver)/launch_ROS1/apm.launch" />
+
+    <node name="odom_to_mavros_node"
+          pkg="odin_ros_driver"
+          type="odom_to_mavros.py"
+          output="screen"
+          launch-prefix="bash -c 'sleep 5; $0 $@'"/>
+
+    <node name="send_initial_mav_command"
+          pkg="mavros"
+          type="mavcmd"
+          args="long 511 32 15000 0 0 0 0 0"
+          launch-prefix="bash -c 'sleep 8; $0 $@'"/>
+</launch>

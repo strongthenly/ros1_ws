@@ -1,0 +1,156 @@
+#!/bin/bash
+# ============================================================
+#  fuel_bridge 冒烟测试（canonical test）
+#  覆盖: 输入桥转发 / seed 悬停 / 未对齐防撞 / 坐标系朝向对齐
+#  用法: bash ~/fuel_ws/src/fuel_bridge/test/smoke_test.sh
+#  说明: 起独立 master 跑话题级验证，不依赖 AirSim/PX4。
+#        分两个桥实例，因为 pos_cmd 一发就永久离开 seed 阶段。
+# ============================================================
+source /opt/ros/noetic/setup.bash 2>/dev/null
+source ~/fuel_ws/devel/setup.bash 2>/dev/null
+D=~/fuel_ws/src/fuel_bridge
+FAIL=0
+ok(){ echo "  PASS $1"; }
+no(){ echo "  FAIL $1"; FAIL=1; }
+
+echo "===== A) 静态 ====="
+# 先清掉本测试可能残留的进程/端口，避免上一轮干扰（防 flaky）
+pkill -f fuel_input_bridge 2>/dev/null
+pkill -f fuel_ctrl_bridge 2>/dev/null
+pkill -f "rosmaster --core -p 1135" 2>/dev/null
+sleep 1
+
+python3 -c "import ast;ast.parse(open('$D/scripts/fuel_input_bridge.py').read())" && ok "fuel_input_bridge.py 语法" || no "input_bridge 语法"
+python3 -c "import ast;ast.parse(open('$D/scripts/fuel_ctrl_bridge.py').read())"  && ok "fuel_ctrl_bridge.py 语法"  || no "ctrl_bridge 语法"
+python3 -c "import xml.etree.ElementTree as E;E.parse('$D/launch/fuel_real.launch')" && ok "fuel_real.launch XML" || no "launch XML"
+for s in fuel_all fuel_stop fuel_frame_check fuel_align_check fuel_map_check; do
+  bash -n "$D/scripts/$s.sh" && ok "$s.sh 语法" || no "$s.sh 语法"
+done
+grep -q "if not self.aligned():" "$D/scripts/fuel_ctrl_bridge.py" && ok "含未对齐防撞保险" || no "缺防撞保险"
+grep -q "_next_action" "$D/scripts/fuel_ctrl_bridge.py" && ok "含 arm/模式动作节流" || no "缺节流"
+A=~/fuel_ws/src/FUEL/fuel_planner/exploration_manager/launch/algorithm.xml
+grep -q 'obstacles_inflation"     value="0.45"' "$A" && ok "FM 防撞: 障碍膨胀 0.45" || no "障碍膨胀未调"
+grep -q 'max_ray_length" value="8.0"'          "$A" && ok "FM 防撞: 感知 8.0m"   || no "感知距离未调"
+grep -q 'clearance_threshold" value="0.45"'    "$A" && ok "FM 防撞: 安全间隙 0.45" || no "安全间隙未调"
+grep -qE 'arg name="max_vel" value="0.8"' "$D/launch/fuel_real.launch" && ok "FM 防撞: 限速 0.8m/s" || no "限速未调"
+grep -qE 'init_z" +default="\$\(arg seed_z\)' "$D/launch/fuel_real.launch" && ok "init_z 继承 seed_z" || no "init_z 未继承"
+
+master(){ export ROS_MASTER_URI=http://127.0.0.1:$1
+  pkill -f "rosmaster --core -p $1" 2>/dev/null; sleep 1
+  setsid rosmaster --core -p $1 >/dev/null 2>&1 </dev/null & sleep 3; }
+cleanup(){ pkill -f fuel_input_bridge 2>/dev/null; pkill -f fuel_ctrl_bridge 2>/dev/null; }
+
+# ---------- 实例1: 输入桥 + seed 悬停 + 未对齐防撞 ----------
+echo ""
+echo "===== B) 实例1（align_samples=1000，对齐不完成）====="
+master 11351
+setsid rosrun fuel_bridge fuel_input_bridge.py >/tmp/sm_in.log 2>&1 </dev/null &
+setsid rosrun fuel_bridge fuel_ctrl_bridge.py _auto_offboard:=false _seed_z:=1.5 _align_samples:=1000 >/tmp/sm_c1.log 2>&1 </dev/null &
+sleep 5
+pgrep -f fuel_input_bridge >/dev/null && ok "输入桥在跑" || no "输入桥未起"
+pgrep -f fuel_ctrl_bridge  >/dev/null && ok "控制桥在跑" || no "控制桥未起"
+
+python3 - <<'PY' || FAIL=1
+import sys, rospy
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import PointCloud2
+from quadrotor_msgs.msg import PositionCommand
+rospy.init_node('sm1', anonymous=True, disable_signals=True)
+F=[]
+def ck(c,m): print("  %s %s" % ("PASS" if c else "FAIL", m)); F.append(c)
+od,ps,cl,sp=[],[],[],[]
+rospy.Subscriber('/odom_world',Odometry,lambda m:od.append(m))
+rospy.Subscriber('/map_ros/pose',PoseStamped,lambda m:ps.append(m))
+rospy.Subscriber('/map_ros/cloud',PointCloud2,lambda m:cl.append(m))
+rospy.Subscriber('/mavros/setpoint_position/local',PoseStamped,lambda m:sp.append(m))
+po=rospy.Publisher('/aft_mapped_to_init',Odometry,queue_size=10)
+pc2=rospy.Publisher('/cloud_registered',PointCloud2,queue_size=10)
+plp=rospy.Publisher('/mavros/local_position/pose',PoseStamped,queue_size=10)
+pcm=rospy.Publisher('/planning/pos_cmd',PositionCommand,queue_size=10)
+rospy.sleep(2)
+
+# 1) 输入桥: 转发 + frame 改写
+o=Odometry(); o.header.frame_id='camera_init'
+o.pose.pose.position.x=1.0; o.pose.pose.position.y=2.0; o.pose.pose.position.z=3.0
+o.pose.pose.orientation.w=1.0
+c2=PointCloud2(); c2.header.frame_id='camera_init'; c2.height=1; c2.width=2; c2.point_step=16; c2.row_step=32; c2.data=[0]*32
+for _ in range(5): po.publish(o); pc2.publish(c2); rospy.sleep(0.1)
+rospy.sleep(0.5)
+ck(bool(od) and od[-1].header.frame_id=='world', "输入桥 /odom_world frame→world")
+ck(bool(ps) and abs(ps[-1].pose.position.x-1.0)<1e-6, "输入桥 /map_ros/pose 位姿透传")
+ck(bool(cl) and cl[-1].header.frame_id=='world', "输入桥 /map_ros/cloud frame→world")
+
+# 2) seed 悬停（还没发过 pos_cmd，且对齐未完成 —— seed 不依赖对齐）
+s=PoseStamped(); s.header.frame_id='world'
+s.pose.position.x=0.5; s.pose.position.y=0.6; s.pose.position.z=0.0; s.pose.orientation.w=1.0
+sp.clear()
+for _ in range(15): plp.publish(s); rospy.sleep(0.1)
+rospy.sleep(0.5)
+ck(bool(sp) and abs(sp[-1].pose.position.z-1.5)<0.02 and abs(sp[-1].pose.position.x-0.5)<0.02,
+   "seed 悬停 → (0.5, 0.6, 1.5)")
+
+# 3) 发 pos_cmd 但未对齐 → 拒绝转发（防撞）
+c=PositionCommand(); c.position.x=3.0; c.position.z=1.5; c.trajectory_flag=1
+for _ in range(3): pcm.publish(c); rospy.sleep(0.2)   # 先让桥拿到 last_cmd
+rospy.sleep(1.0)                                      # 等它彻底离开 seed 阶段
+sp.clear()                                            # 清掉 seed 阶段的残留
+for _ in range(5): pcm.publish(c); rospy.sleep(0.1)
+ck(len(sp)==0, "未对齐时拒绝转发 FUEL 目标（防撞保险）")
+sys.exit(0 if all(F) else 1)
+PY
+cleanup; pkill -f "rosmaster --core -p 11351" 2>/dev/null
+
+# ---------- 实例2: 朝向对齐 + 旋转转发 ----------
+echo ""
+echo "===== C) 实例2（align_samples=5，测对齐+旋转）====="
+master 11352
+setsid rosrun fuel_bridge fuel_ctrl_bridge.py _auto_offboard:=false _seed_z:=0 _align_samples:=5 >/tmp/sm_c2.log 2>&1 </dev/null &
+sleep 5
+pgrep -f fuel_ctrl_bridge >/dev/null && ok "控制桥在跑" || no "控制桥未起"
+
+python3 - <<'PY' || FAIL=1
+import math, sys, rospy
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
+from quadrotor_msgs.msg import PositionCommand
+rospy.init_node('sm2', anonymous=True, disable_signals=True)
+F=[]
+def ck(c,m): print("  %s %s" % ("PASS" if c else "FAIL", m)); F.append(c)
+yq=lambda y:(0.0,0.0,math.sin(y/2),math.cos(y/2))
+sp=[]; rospy.Subscriber('/mavros/setpoint_position/local',PoseStamped,lambda m:sp.append(m))
+po=rospy.Publisher('/odom_world',Odometry,queue_size=10)
+plp=rospy.Publisher('/mavros/local_position/pose',PoseStamped,queue_size=10)
+pcm=rospy.Publisher('/planning/pos_cmd',PositionCommand,queue_size=10)
+rospy.sleep(2)
+PSI=math.radians(82.24)
+# 喂位姿: FUEL 系 yaw=0, PX4 系 yaw=82.24 → 桥估计 psi=82.24
+for _ in range(15):
+    o=Odometry(); o.pose.pose.orientation.x,o.pose.pose.orientation.y,o.pose.pose.orientation.z,o.pose.pose.orientation.w=yq(0.0)
+    po.publish(o)
+    s=PoseStamped(); s.pose.orientation.x,s.pose.orientation.y,s.pose.orientation.z,s.pose.orientation.w=yq(PSI)
+    plp.publish(s); rospy.sleep(0.1)
+rospy.sleep(1)
+c=PositionCommand(); c.position.x=3.0; c.position.y=0.0; c.position.z=1.5; c.trajectory_flag=1
+sp.clear()
+for _ in range(20): pcm.publish(c); rospy.sleep(0.1)
+rospy.sleep(0.5)
+if not sp:
+    ck(False, "对齐后转发 FUEL 目标")
+else:
+    g=sp[-1]; ex=(3.0*math.cos(PSI),3.0*math.sin(PSI))
+    ck(abs(g.pose.position.x-ex[0])<0.05 and abs(g.pose.position.y-ex[1])<0.05,
+       "目标点按朝向差旋转 → (%.3f, %.3f)（期望 %.3f, %.3f）" % (g.pose.position.x,g.pose.position.y,ex[0],ex[1]))
+    ey=math.degrees(2*math.atan2(g.pose.orientation.z,g.pose.orientation.w))
+    ck(abs(ey-82.24)<1.0, "yaw 同步偏移 → %.2f deg（期望 82.24）" % ey)
+sys.exit(0 if all(F) else 1)
+PY
+cleanup; pkill -f "rosmaster --core -p 11352" 2>/dev/null
+
+echo ""
+echo ""
+echo "===== F) goal_arbiter 单测（FUEL目标→SUPER航点的仲裁限频）====="
+python3 "$D/test/test_goal_arbiter.py" && ok "goal_arbiter 单测" || no "goal_arbiter 单测"
+
+[ $FAIL -eq 0 ] && echo "SMOKE TEST: ALL PASS" || echo "SMOKE TEST: FAILED"
+exit $FAIL
